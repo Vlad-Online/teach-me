@@ -18,7 +18,6 @@ use teachme_core::sync::{self, Pairing, SyncReport};
 use teachme_core::{Config, Db, Direction, Outcome, StudyCard};
 
 const DIR: Direction = Direction::PtToRu;
-const NEW_PER_DAY: u32 = 10;
 
 struct AppState {
     data_dir: PathBuf,
@@ -35,6 +34,15 @@ fn err<E: std::fmt::Display>(e: E) -> String {
 }
 
 impl AppState {
+    /// Study settings and API keys: set on the desktop, arrive with each sync.
+    fn shared(&self) -> sync::SharedSettings {
+        sync::shared_settings(&self.db.lock().unwrap()).unwrap_or_default()
+    }
+
+    fn new_per_day(&self) -> u32 {
+        self.shared().new_per_day
+    }
+
     fn clips_dir(&self) -> PathBuf {
         self.data_dir.join("clips")
     }
@@ -44,12 +52,23 @@ impl AppState {
         serde_json::from_str(&raw).ok()
     }
 
-    /// API keys come with the pairing QR code.
+    /// Models and keys from the desktop (last sync); before the first sync,
+    /// the keys from the pairing QR code.
     fn config(&self) -> Config {
         let mut cfg = Config::default();
+        let synced = sync::shared_settings(&self.db.lock().unwrap());
+        if let Some(s) = synced {
+            cfg.llm = s.llm;
+            cfg.anthropic = s.anthropic;
+            cfg.openai = s.openai;
+        }
         if let Some(p) = self.pairing() {
-            cfg.anthropic.api_key = p.anthropic_key.unwrap_or_default();
-            cfg.openai.api_key = p.openai_key.unwrap_or_default();
+            if cfg.anthropic.api_key.is_empty() {
+                cfg.anthropic.api_key = p.anthropic_key.unwrap_or_default();
+            }
+            if cfg.openai.api_key.is_empty() {
+                cfg.openai.api_key = p.openai_key.unwrap_or_default();
+            }
         }
         if cfg.anthropic.api_key.is_empty() && !cfg.openai.api_key.is_empty() {
             cfg.llm.provider = "openai".into();
@@ -61,6 +80,7 @@ impl AppState {
 #[derive(Serialize)]
 struct Status {
     stats: Stats,
+    new_per_day: u32,
     paired: bool,
     host: String,
     last_sync: Option<DateTime<Utc>>,
@@ -72,9 +92,11 @@ struct Status {
 fn status(st: State<AppState>) -> CmdResult<Status> {
     let cfg = st.config();
     let pairing = st.pairing();
+    let new_per_day = st.new_per_day();
     let db = st.db.lock().unwrap();
     Ok(Status {
         stats: db.stats(DIR).map_err(err)?,
+        new_per_day,
         paired: pairing.is_some(),
         host: pairing.map(|p| format!("{}:{}", p.host, p.port)).unwrap_or_default(),
         last_sync: db.meta("sync_last_at").ok().flatten().and_then(|s| s.parse().ok()),
@@ -96,17 +118,22 @@ fn pair(st: State<AppState>, payload: String) -> CmdResult<()> {
 
 // ---------- reminders ----------
 
+/// Reminder rhythm (interval, active hours) comes from the desktop; only
+/// on/off is a setting of the phone itself.
 #[derive(Serialize, Deserialize, Clone)]
 struct Reminders {
     enabled: bool,
+    #[serde(default)]
     interval_minutes: u32,
+    #[serde(default)]
     from_hour: u32,
+    #[serde(default)]
     to_hour: u32,
 }
 
 impl Default for Reminders {
     fn default() -> Self {
-        Self { enabled: true, interval_minutes: 30, from_hour: 9, to_hour: 22 }
+        Self { enabled: true, interval_minutes: 0, from_hour: 0, to_hour: 0 }
     }
 }
 
@@ -126,14 +153,22 @@ struct RemindersDto {
 
 impl AppState {
     fn reminders(&self) -> Reminders {
-        self.db
+        let enabled = self
+            .db
             .lock()
             .unwrap()
             .meta("reminders")
             .ok()
             .flatten()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .and_then(|s| serde_json::from_str::<Reminders>(&s).ok())
+            .map_or(true, |r| r.enabled);
+        let s = self.shared();
+        Reminders {
+            enabled,
+            interval_minutes: s.interval_minutes,
+            from_hour: s.active_from_hour,
+            to_hour: s.active_to_hour,
+        }
     }
 }
 
@@ -147,6 +182,7 @@ struct Slot {
 
 /// Times within active hours, every `interval`, where something is to study.
 fn plan_slots(st: &AppState, r: &Reminders) -> anyhow::Result<Vec<Slot>> {
+    let per_day = st.new_per_day() as i64;
     let db = st.db.lock().unwrap();
     let unseen = db.stats(DIR)?.unseen;
     let new_today = db.new_today(DIR)?;
@@ -162,7 +198,7 @@ fn plan_slots(st: &AppState, r: &Reminders) -> anyhow::Result<Vec<Slot>> {
                 |row| row.get(0),
             )?;
             // The daily limit of new phrases restarts tomorrow.
-            let left_today = if t.date_naive() == now.date_naive() { NEW_PER_DAY as i64 - new_today } else { NEW_PER_DAY as i64 };
+            let left_today = if t.date_naive() == now.date_naive() { per_day - new_today } else { per_day };
             let new = unseen.min(left_today.max(0));
             if due + new > 0 {
                 slots.push(Slot { at: t, due, new });
@@ -265,16 +301,14 @@ async fn get_reminders(app: AppHandle) -> CmdResult<RemindersDto> {
 }
 
 #[tauri::command]
-async fn set_reminders(app: AppHandle, settings: Reminders) -> CmdResult<RemindersDto> {
-    if settings.from_hour >= settings.to_hour || settings.to_hour > 24 {
-        return Err("Время «с» должно быть раньше «до»".into());
-    }
+async fn set_reminders(app: AppHandle, enabled: bool) -> CmdResult<RemindersDto> {
     tauri::async_runtime::spawn_blocking(move || {
         let st = app.state::<AppState>();
+        let r = Reminders { enabled, ..Default::default() };
         st.db
             .lock()
             .unwrap()
-            .set_meta("reminders", &serde_json::to_string(&settings).map_err(err)?)
+            .set_meta("reminders", &serde_json::to_string(&r).map_err(err)?)
             .map_err(err)?;
         reschedule(&app).map_err(err)
     })
@@ -318,8 +352,9 @@ struct CardDto {
 
 #[tauri::command]
 fn next_card(st: State<AppState>) -> CmdResult<Option<CardDto>> {
+    let new_per_day = st.new_per_day();
     let db = st.db.lock().unwrap();
-    let Some(card) = db.next_card(DIR, Utc::now(), NEW_PER_DAY).map_err(err)? else {
+    let Some(card) = db.next_card(DIR, Utc::now(), new_per_day).map_err(err)? else {
         return Ok(None);
     };
     db.mark_clip_shown(card.clip_id).map_err(err)?;

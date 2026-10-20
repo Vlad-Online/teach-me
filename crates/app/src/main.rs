@@ -705,6 +705,7 @@ fn main() {
                     clips_dir: st.home.clips_dir(),
                     udp_port: st.cfg.sync.udp_port,
                     http_port: st.cfg.sync.http_port,
+                    settings: teachme_core::sync::SharedSettings::from_config(&st.cfg),
                 };
                 if let Err(e) = teachme_core::sync::start_server(server) {
                     eprintln!("синхронизация недоступна: {e}");

@@ -115,16 +115,7 @@
     <div class="head">Напоминания
       <label class="toggle"><input type="checkbox" id="rem-on"><span></span></label>
     </div>
-    <div id="rem-opts" class="stack" style="gap: 10px">
-      <div class="line">каждые
-        <select id="rem-interval">
-          <option value="15">15 мин</option><option value="20">20 мин</option><option value="30">30 мин</option>
-          <option value="45">45 мин</option><option value="60">1 час</option><option value="90">1,5 часа</option>
-          <option value="120">2 часа</option><option value="180">3 часа</option>
-        </select>
-      </div>
-      <div class="line">с <select id="rem-from"></select> до <select id="rem-to"></select></div>
-    </div>
+    <div id="rem-opts" class="line" style="font-size: 15px"></div>
     <div class="small" id="rem-line"></div>
     <button class="ghost" id="rem-test" style="min-height: 36px; padding: 4px 0; text-align: left">Проверить: напомнить через 10 секунд</button>
   </div>
@@ -211,7 +202,7 @@ async function refresh() {
     return;
   }
   const s = status.stats;
-  $('t-new').textContent = `${s.new_today}/10`;
+  $('t-new').textContent = `${s.new_today}/${status.new_per_day}`;
   $('t-due').textContent = s.due_now;
   $('t-hard').textContent = s.difficult;
   $('t-all').textContent = s.phrases;
@@ -240,6 +231,7 @@ async function sync(quiet) {
     if (r.new_clips) parts.push(`клипов: ${r.new_clips}`);
     if (r.received_events + r.sent_events) parts.push(`ответов: ${r.received_events + r.sent_events}`);
     line.textContent = parts.length ? 'Готово — ' + parts.join(', ') : 'Всё уже синхронизировано';
+    loadReminders();
   } catch (e) {
     line.classList.add('err');
     line.textContent = String(e);
@@ -474,16 +466,10 @@ mic.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---------------- reminders ----------------
 
-for (let h = 0; h <= 24; h++) {
-  if (h < 24) $('rem-from').add(new Option(`${h}:00`, h));
-  if (h > 0) $('rem-to').add(new Option(`${h}:00`, h));
-}
-
 function showReminders(r) {
   $('rem-on').checked = r.enabled;
-  $('rem-interval').value = String(r.interval_minutes);
-  $('rem-from').value = String(r.from_hour);
-  $('rem-to').value = String(r.to_hour);
+  const every = r.interval_minutes % 60 === 0 ? `${r.interval_minutes / 60} ч` : `${r.interval_minutes} мин`;
+  $('rem-opts').textContent = `Каждые ${every}, с ${r.from_hour}:00 до ${r.to_hour}:00 — как на ПК`;
   $('rem-opts').hidden = !r.enabled;
   const line = $('rem-line');
   line.style.color = '';
@@ -502,28 +488,23 @@ async function notificationsAllowed() {
 }
 
 async function saveReminders() {
-  const settings = {
-    enabled: $('rem-on').checked,
-    interval_minutes: Number($('rem-interval').value),
-    from_hour: Number($('rem-from').value),
-    to_hour: Number($('rem-to').value),
-  };
-  if (settings.enabled && !(await notificationsAllowed())) {
+  let enabled = $('rem-on').checked;
+  if (enabled && !(await notificationsAllowed())) {
     $('rem-on').checked = false;
-    settings.enabled = false;
+    enabled = false;
     $('rem-line').style.color = 'var(--bad)';
     $('rem-line').textContent = 'Нет разрешения на уведомления: включите его в настройках Android';
     return;
   }
   try {
-    showReminders(await invoke('set_reminders', { settings }));
+    showReminders(await invoke('set_reminders', { enabled }));
   } catch (e) {
     $('rem-line').style.color = 'var(--bad)';
     $('rem-line').textContent = String(e);
   }
 }
 
-['rem-on', 'rem-interval', 'rem-from', 'rem-to'].forEach((id) => ($(id).onchange = saveReminders));
+$('rem-on').onchange = saveReminders;
 $('rem-test').onclick = async () => {
   if (!(await notificationsAllowed())) {
     $('rem-line').style.color = 'var(--bad)';

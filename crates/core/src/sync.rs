@@ -26,11 +26,56 @@ pub const HTTP_PORT: u16 = 47812;
 const ASK: &str = "teach-me?";
 const ANSWER: &str = "teach-me!";
 
+/// Settings that belong to the learner, not to a device: the desktop owns
+/// them (settings window) and the phone follows on every sync.
+/// API keys travel too, so a key changed on the desktop needs no new QR code
+/// (the request is authorized by the pairing key; traffic is plain LAN HTTP).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SharedSettings {
+    pub new_per_day: u32,
+    /// Reminder rhythm: the same as the desktop popups.
+    pub interval_minutes: u32,
+    pub active_from_hour: u32,
+    pub active_to_hour: u32,
+    pub llm: crate::config::LlmConfig,
+    pub anthropic: crate::config::AnthropicConfig,
+    pub openai: crate::config::OpenAiConfig,
+}
+
+impl Default for SharedSettings {
+    fn default() -> Self {
+        Self::from_config(&crate::config::Config::default())
+    }
+}
+
+impl SharedSettings {
+    pub fn from_config(c: &crate::config::Config) -> Self {
+        Self {
+            new_per_day: c.trainer.new_per_day,
+            interval_minutes: c.trainer.interval_minutes,
+            active_from_hour: c.trainer.active_from_hour,
+            active_to_hour: c.trainer.active_to_hour,
+            llm: c.llm.clone(),
+            anthropic: c.anthropic.clone(),
+            openai: c.openai.clone(),
+        }
+    }
+}
+
+/// Last settings received from the desktop; None before the first sync.
+pub fn shared_settings(db: &Db) -> Option<SharedSettings> {
+    db.meta("shared").ok().flatten().and_then(|s| serde_json::from_str(&s).ok())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {
     pub device: String,
     pub phrases: Vec<PhraseExport>,
     pub clips: Vec<ClipExport>,
+    /// Absent when talking to an older desktop.
+    #[serde(default)]
+    pub settings: Option<SharedSettings>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -98,6 +143,7 @@ pub struct ServerConfig {
     pub clips_dir: PathBuf,
     pub udp_port: u16,
     pub http_port: u16,
+    pub settings: SharedSettings,
 }
 
 /// Starts the UDP responder and the HTTP server on background threads.
@@ -146,7 +192,7 @@ pub fn start_server(cfg: ServerConfig) -> Result<()> {
             }
         };
         for mut req in http.incoming_requests() {
-            let resp = handle(&db, &cfg.clips_dir, &key, &mut req);
+            let resp = handle(&db, &cfg.clips_dir, &key, &cfg.settings, &mut req);
             let _ = match resp {
                 Ok(r) => req.respond(r),
                 Err((code, msg)) => req.respond(tiny_http::Response::from_string(msg).with_status_code(code)),
@@ -164,7 +210,13 @@ fn json_response<T: Serialize>(v: &T) -> Result<HttpResponse, (u16, String)> {
     Ok(tiny_http::Response::new(200.into(), vec![header], Box::new(std::io::Cursor::new(body)) as Box<dyn Read + Send>, None, None))
 }
 
-fn handle(db: &Db, clips_dir: &Path, key: &str, req: &mut tiny_http::Request) -> Result<HttpResponse, (u16, String)> {
+fn handle(
+    db: &Db,
+    clips_dir: &Path,
+    key: &str,
+    settings: &SharedSettings,
+    req: &mut tiny_http::Request,
+) -> Result<HttpResponse, (u16, String)> {
     let authorized = req
         .headers()
         .iter()
@@ -179,6 +231,7 @@ fn handle(db: &Db, clips_dir: &Path, key: &str, req: &mut tiny_http::Request) ->
             device: db.device_id.clone(),
             phrases: db.export_phrases().map_err(internal)?,
             clips: db.export_clips().map_err(internal)?,
+            settings: Some(settings.clone()),
         }),
         (tiny_http::Method::Get, path) if path.starts_with("/clips/") => {
             let name = &path["/clips/".len()..];
@@ -281,6 +334,9 @@ pub fn sync_with(addr: SocketAddr, key: &str, db: &Db, clips_dir: &Path) -> Resu
 
     // 1. Content: phrases, then clips we don't have.
     let manifest: Manifest = get("/manifest")?.json()?;
+    if let Some(settings) = &manifest.settings {
+        db.set_meta("shared", &serde_json::to_string(settings)?)?;
+    }
     let known_uids: std::collections::HashSet<String> =
         db.export_phrases()?.into_iter().map(|p| p.uid).collect();
     for p in &manifest.phrases {
@@ -380,6 +436,11 @@ mod tests {
             clips_dir: pc_dir.join("clips"),
             udp_port,
             http_port,
+            settings: SharedSettings {
+                new_per_day: 30,
+                interval_minutes: 40,
+                ..Default::default()
+            },
         })
         .unwrap();
         let key = pairing_key(&pc).unwrap();
@@ -398,6 +459,8 @@ mod tests {
         let r = sync_with(addr, &key, &phone, &phone_dir.join("clips")).unwrap();
         assert_eq!((r.new_phrases, r.new_clips, r.received_events), (2, 2, 1));
         assert_eq!(std::fs::read_to_string(phone_dir.join("clips/clip1.mp4")).unwrap(), "video 1");
+        let s = shared_settings(&phone).expect("settings arrive with the manifest");
+        assert_eq!((s.new_per_day, s.interval_minutes), (30, 40), "the phone follows the desktop");
 
         // The phone answers a card; the desktop gets it on the next sync.
         let on_phone = phone.phrase_exists("Está bem.").unwrap().unwrap();

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Подключить телефон</title>
+<style>
+  :root { --bg: #ffffff; --text: #1d1f23; --muted: #6b7280; --border: #e3e5e9; --warn: #9a6200; --warn-bg: #fff4dc; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1c1d21; --text: #ececee; --muted: #9a9ca3; --border: #34363c; --warn: #f2bb4b; --warn-bg: #3a2f17; }
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+  main { padding: 20px 24px; display: flex; flex-direction: column; gap: 12px; align-items: center; text-align: center; }
+  h1 { font-size: 18px; margin: 0; }
+  .qr { background: #fff; padding: 8px; border-radius: 12px; border: 1px solid var(--border); }
+  .qr svg { display: block; width: 320px; height: 320px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .warn { background: var(--warn-bg); color: var(--warn); padding: 8px 12px; border-radius: 8px; font-size: 12.5px; }
+  code { font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Подключить телефон</h1>
+  <div class="muted">Откройте teach-me на телефоне → «Подключить к ПК» → отсканируйте код.<br>
+    Телефон и ПК должны быть в одной сети Wi-Fi.</div>
+  <div class="qr" id="qr"></div>
+  <div class="muted" id="addr"></div>
+  <div class="warn">В коде — ключ доступа к вашей базе и ключи Claude/OpenAI. Не показывайте его посторонним.</div>
+</main>
+<script>
+(async () => {
+  const p = await window.__TAURI__.core.invoke('get_pairing');
+  document.getElementById('qr').innerHTML = p.svg;
+  document.getElementById('addr').innerHTML = p.enabled
+    ? `Адрес ПК: <code>${p.host}:${p.port}</code>`
+    : 'Синхронизация выключена в config.toml ([sync] enabled = false)';
+})();
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.close(); });
+</script>
+</body>
+</html>

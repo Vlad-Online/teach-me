@@ -3,7 +3,7 @@ use rs_fsrs::{Card, Parameters, Rating, State, FSRS};
 use serde::{Deserialize, Serialize};
 
 /// Training direction. Each direction has its own FSRS state per phrase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Direction {
     /// Watch the Portuguese clip, say the Russian translation.
     PtToRu = 0,

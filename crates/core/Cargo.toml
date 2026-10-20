@@ -13,3 +13,4 @@ rusqlite.workspace = true
 reqwest.workspace = true
 rs-fsrs = "1.2"
 base64 = "0.22"
+tiny_http = "0.12"

@@ -306,6 +306,11 @@ fn burned_subs_band(api: &Llm, video: &Path, at_ms: i64) -> Result<Option<(f64, 
     Ok(Some(((top - 0.04).max(0.0), (bottom + 0.04).min(1.0))))
 }
 
+/// Clip file name: one per (video, start), so the same cut is never made twice.
+fn clip_file_name(src: &SourceRow, c: &Candidate) -> String {
+    format!("{}_{}.mp4", safe_name(&src.video_id), c.clip_start_ms)
+}
+
 fn safe_name(id: &str) -> String {
     id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
 }
@@ -411,6 +416,9 @@ pub fn run(home: &Home, cfg: &Config, db: &Db, want: usize, dry_run: bool) -> Re
     }
 
     let (llm, stt) = apis.expect("apis are set unless dry run");
+    // A cut already in the base can come back as a candidate: its ASR text differs
+    // from the corrected text stored for the phrase. Never cut (and overwrite) it again.
+    cands.retain(|c| !db.has_clip(&clip_file_name(&sources[c.source], c)).unwrap_or(false));
     rate(&llm, &mut cands, &cfg.harvest.level)?;
     // A few spares: some phrases get dropped at the enrichment step.
     let picked = select(&cands, &sources, want + want / 2 + 2);
@@ -476,7 +484,7 @@ fn make_clip(
     src: &SourceRow,
     c: &Candidate,
 ) -> Result<Option<String>> {
-    let file = format!("{}_{}.mp4", safe_name(&src.video_id), c.clip_start_ms);
+    let file = clip_file_name(src, c);
     let path = clips_dir.join(&file);
     let mid = (c.clip_start_ms + c.clip_end_ms) / 2;
     let blur = match burned_subs_band(llm, video, mid) {

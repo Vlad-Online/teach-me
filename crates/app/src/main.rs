@@ -19,6 +19,7 @@ use teachme_core::openai::OpenAi;
 use teachme_core::{Config, Db, Direction, Home, Outcome, StudyCard};
 
 const QUIZ: &str = "quiz";
+const PAIR: &str = "pair";
 const TOAST_SIZE: (f64, f64) = (380.0, 128.0);
 const FULL_SIZE: (f64, f64) = (460.0, 640.0);
 const DIR: Direction = Direction::PtToRu;
@@ -342,6 +343,51 @@ fn ui_log(msg: String) {
     eprintln!("[ui] {msg}");
 }
 
+#[derive(Serialize)]
+struct PairingDto {
+    svg: String,
+    host: String,
+    port: u16,
+    enabled: bool,
+}
+
+/// QR code with everything the phone needs: address, pairing key, API keys.
+#[tauri::command]
+fn get_pairing(st: State<AppState>) -> CmdResult<PairingDto> {
+    let key = teachme_core::sync::pairing_key(&st.db.lock().unwrap()).map_err(err)?;
+    let host = teachme_core::sync::local_ip().map(|ip| ip.to_string()).unwrap_or_default();
+    let nonempty = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
+    let pairing = teachme_core::sync::Pairing {
+        host: host.clone(),
+        port: st.cfg.sync.http_port,
+        key,
+        anthropic_key: nonempty(&st.cfg.anthropic.api_key),
+        openai_key: nonempty(&st.cfg.openai.api_key),
+    };
+    let payload = serde_json::to_string(&pairing).map_err(err)?;
+    let svg = qrcode::QrCode::new(payload.as_bytes())
+        .map_err(err)?
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(320, 320)
+        .quiet_zone(true)
+        .build();
+    Ok(PairingDto { svg, host, port: st.cfg.sync.http_port, enabled: st.cfg.sync.enabled })
+}
+
+fn open_pairing(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(PAIR) {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, PAIR, WebviewUrl::App("pair.html".into()))
+        .title("teach-me — подключить телефон")
+        .inner_size(420.0, 600.0)
+        .resizable(false)
+        .center()
+        .build();
+}
+
 #[tauri::command]
 fn stats(st: State<AppState>) -> CmdResult<Stats> {
     st.db.lock().unwrap().stats(DIR).map_err(err)
@@ -392,14 +438,25 @@ fn update_tray_tooltip(app: &AppHandle) {
     let st = app.state::<AppState>();
     let Ok(s) = st.db.lock().unwrap().stats(DIR) else { return };
     let paused = st.sched.lock().unwrap().paused_until.is_some_and(|p| p > Utc::now());
+    let last_sync = st
+        .db
+        .lock()
+        .unwrap()
+        .meta("sync_last_client")
+        .ok()
+        .flatten()
+        .and_then(|v| v.split_once(' ').and_then(|(_, ts)| ts.parse::<DateTime<Utc>>().ok()))
+        .map(|t| format!("\nТелефон: синхр. {}", t.with_timezone(&Local).format("%d.%m %H:%M")))
+        .unwrap_or_default();
     let text = format!(
-        "teach-me{}\nФраз: {} · новых: {}\nК повтору: {} · трудных: {}\nСегодня: {}",
+        "teach-me{}\nФраз: {} · новых: {}\nК повтору: {} · трудных: {}\nСегодня: {}{}",
         if paused { " (пауза)" } else { "" },
         s.phrases,
         s.unseen,
         s.due_now,
         s.difficult,
-        s.reviewed_today
+        s.reviewed_today,
+        last_sync
     );
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(text));
@@ -472,7 +529,8 @@ fn main() {
             close_quiz,
             toggle_record,
             stats,
-            ui_log
+            ui_log,
+            get_pairing
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -486,9 +544,11 @@ fn main() {
             let now_i = MenuItem::with_id(app, "now", "Карточка сейчас", true, None::<&str>)?;
             let pause_i = MenuItem::with_id(app, "pause", "Пауза на час", true, None::<&str>)?;
             let resume_i = MenuItem::with_id(app, "resume", "Продолжить", true, None::<&str>)?;
+            let pair_i = MenuItem::with_id(app, "pair", "Подключить телефон…", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&now_i, &pause_i, &resume_i, &sep, &quit_i])?;
+            let sep2 = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(app, &[&now_i, &pause_i, &resume_i, &sep, &pair_i, &sep2, &quit_i])?;
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("teach-me")
@@ -504,6 +564,10 @@ fn main() {
                             s.paused_until = None;
                             s.next_popup = Utc::now();
                         }
+                        "pair" => {
+                            let app = app.clone();
+                            std::thread::spawn(move || open_pairing(&app));
+                        }
                         "quit" => app.exit(0),
                         _ => {}
                     }
@@ -515,6 +579,17 @@ fn main() {
                     }
                 })
                 .build(app)?;
+            if st.cfg.sync.enabled {
+                let server = teachme_core::sync::ServerConfig {
+                    db_path: st.home.db_path(),
+                    clips_dir: st.home.clips_dir(),
+                    udp_port: st.cfg.sync.udp_port,
+                    http_port: st.cfg.sync.http_port,
+                };
+                if let Err(e) = teachme_core::sync::start_server(server) {
+                    eprintln!("синхронизация недоступна: {e}");
+                }
+            }
             update_tray_tooltip(&handle);
             if std::env::args().any(|a| a == "--now") {
                 spawn_open_quiz(&handle, true);

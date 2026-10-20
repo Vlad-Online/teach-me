@@ -7,11 +7,27 @@ pub const CONFIG_FILE: &str = "config.toml";
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub sync: SyncConfig,
     pub llm: LlmConfig,
     pub anthropic: AnthropicConfig,
     pub openai: OpenAiConfig,
     pub trainer: TrainerConfig,
     pub harvest: HarvestConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SyncConfig {
+    /// Desktop: answer phones on the local network.
+    pub enabled: bool,
+    pub udp_port: u16,
+    pub http_port: u16,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self { enabled: true, udp_port: crate::sync::UDP_PORT, http_port: crate::sync::HTTP_PORT }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -108,6 +124,7 @@ pub struct HarvestConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            sync: SyncConfig::default(),
             llm: LlmConfig::default(),
             anthropic: AnthropicConfig::default(),
             openai: OpenAiConfig::default(),

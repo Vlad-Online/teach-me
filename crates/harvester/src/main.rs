@@ -43,6 +43,15 @@ enum Cmd {
     Stats,
     /// Проверить ключи и модели реальными запросами
     CheckApi,
+    /// Изобразить телефон: найти ПК в сети и синхронизироваться в отдельную базу
+    PhoneSim {
+        /// Папка «телефона»: база и клипы
+        #[arg(long)]
+        dir: std::path::PathBuf,
+        /// Ключ сопряжения (по умолчанию — ключ этого ПК)
+        #[arg(long)]
+        key: Option<String>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -79,6 +88,22 @@ fn main() -> Result<()> {
             eprintln!("Готово: добавлено фраз {n}");
         }
         Cmd::CheckApi => check_api(&home, &cfg, &db)?,
+        Cmd::PhoneSim { dir, key } => {
+            use teachme_core::sync;
+            let key = match key {
+                Some(k) => k,
+                None => sync::pairing_key(&db)?,
+            };
+            let phone = Db::open(&dir.join("phone.db"))?;
+            let t = std::time::Instant::now();
+            let addr = sync::discover(&phone.device_id, cfg.sync.udp_port, &[], std::time::Duration::from_secs(4))?
+                .ok_or_else(|| anyhow::anyhow!("ПК в сети не найден"))?;
+            println!("найден ПК {addr} за {:.1} c", t.elapsed().as_secs_f64());
+            let t = std::time::Instant::now();
+            let r = sync::sync_with(addr, &key, &phone, &dir.join("clips"))?;
+            println!("синхронизация за {:.1} c: {}", t.elapsed().as_secs_f64(), serde_json::to_string(&r)?);
+            println!("на «телефоне»: {}", serde_json::to_string(&phone.stats(Direction::PtToRu)?)?);
+        }
         Cmd::Stats => {
             let s = db.stats(Direction::PtToRu)?;
             println!("{}", serde_json::to_string_pretty(&s)?);

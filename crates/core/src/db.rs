@@ -154,6 +154,29 @@ pub struct NewClip<'a> {
     pub subs_pt: &'a str,
 }
 
+/// A phrase as sent from the desktop to the phone.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PhraseExport {
+    pub uid: String,
+    pub text_pt: String,
+    pub text_ru: String,
+    pub alt_ru: Vec<String>,
+    pub notes: String,
+    pub cefr: String,
+    pub usefulness: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ClipExport {
+    pub file: String,
+    pub phrase_uid: String,
+    pub source_url: String,
+    pub source_title: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub subs_pt: String,
+}
+
 pub struct SourceRow {
     pub video_id: String,
     pub url: String,
@@ -194,10 +217,12 @@ fn event_id(device: &str, ts: DateTime<Utc>, uid: &str) -> String {
 
 fn new_device_id() -> String {
     let prefix = if cfg!(target_os = "android") { "phone" } else { "desktop" };
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seed = format!(
-        "{:?}{}{}",
+        "{:?}{}{}{}",
         std::time::SystemTime::now(),
         std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         std::env::var("COMPUTERNAME").unwrap_or_default()
     );
     format!("{prefix}-{}", &phrase_uid(&seed)[..10])
@@ -342,6 +367,121 @@ impl Db {
             params![phrase_id, c.file, c.source_url, c.source_title, c.start_ms, c.end_ms, c.subs_pt],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn export_phrases(&self) -> Result<Vec<PhraseExport>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT uid, text_pt, text_ru, alt_ru, notes, cefr, usefulness FROM phrases ORDER BY id")?;
+        let rows = st.query_map([], |r| {
+            let alt: String = r.get(3)?;
+            Ok(PhraseExport {
+                uid: r.get(0)?,
+                text_pt: r.get(1)?,
+                text_ru: r.get(2)?,
+                alt_ru: serde_json::from_str(&alt).unwrap_or_default(),
+                notes: r.get(4)?,
+                cefr: r.get(5)?,
+                usefulness: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    pub fn export_clips(&self) -> Result<Vec<ClipExport>> {
+        let mut st = self.conn.prepare(
+            "SELECT c.file, p.uid, c.source_url, c.source_title, c.start_ms, c.end_ms, c.subs_pt
+             FROM clips c JOIN phrases p ON p.id = c.phrase_id ORDER BY c.id",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok(ClipExport {
+                file: r.get(0)?,
+                phrase_uid: r.get(1)?,
+                source_url: r.get(2)?,
+                source_title: r.get(3)?,
+                start_ms: r.get(4)?,
+                end_ms: r.get(5)?,
+                subs_pt: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Inserts or updates a phrase received from the desktop (matched by uid).
+    pub fn upsert_phrase(&self, p: &PhraseExport) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO phrases (uid, text_pt, norm_pt, text_ru, alt_ru, notes, cefr, usefulness, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(uid) DO UPDATE SET text_pt=?2, text_ru=?4, alt_ru=?5, notes=?6, cefr=?7, usefulness=?8",
+            params![
+                p.uid,
+                p.text_pt,
+                normalize(&p.text_pt),
+                p.text_ru,
+                serde_json::to_string(&p.alt_ru)?,
+                p.notes,
+                p.cefr,
+                p.usefulness,
+                Utc::now()
+            ],
+        )?;
+        Ok(self.conn.query_row("SELECT id FROM phrases WHERE uid = ?1", [&p.uid], |r| r.get(0))?)
+    }
+
+    pub fn has_clip(&self, file: &str) -> Result<bool> {
+        Ok(self.conn.prepare("SELECT 1 FROM clips WHERE file = ?1")?.exists([file])?)
+    }
+
+    /// Clip received from the desktop; its file must already be on disk.
+    pub fn insert_clip_export(&self, c: &ClipExport) -> Result<()> {
+        let phrase_id: i64 = self.conn.query_row("SELECT id FROM phrases WHERE uid = ?1", [&c.phrase_uid], |r| r.get(0))?;
+        self.insert_clip(
+            phrase_id,
+            &NewClip {
+                file: &c.file,
+                source_url: &c.source_url,
+                source_title: &c.source_title,
+                start_ms: c.start_ms,
+                end_ms: c.end_ms,
+                subs_pt: &c.subs_pt,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Latest event time known per device: tells the other side what to send.
+    pub fn event_watermarks(&self) -> Result<std::collections::HashMap<String, DateTime<Utc>>> {
+        let mut st = self.conn.prepare("SELECT device, MAX(ts) FROM events GROUP BY device")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, DateTime<Utc>>(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Events the other side lacks, given its watermarks.
+    pub fn events_after(&self, known: &std::collections::HashMap<String, DateTime<Utc>>) -> Result<Vec<Event>> {
+        let devices: Vec<String> = self
+            .conn
+            .prepare("SELECT DISTINCT device FROM events")?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        let mut out = vec![];
+        for d in devices {
+            let mark = known.get(&d);
+            out.extend(self.events_of_device(&d)?.into_iter().filter(|e| mark.is_none_or(|m| e.ts > *m)));
+        }
+        Ok(out)
+    }
+
+    pub fn meta(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.conn
+            .execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![key, value])?;
+        Ok(())
     }
 
     pub fn known_norms(&self) -> Result<Vec<String>> {
@@ -689,8 +829,11 @@ mod tests {
         Db::open(&path).unwrap()
     }
 
-    fn rand_suffix() -> u128 {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    fn rand_suffix() -> String {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        format!("{t}-{n}")
     }
 
     fn add(db: &Db, pt: &str, usefulness: i64) -> i64 {

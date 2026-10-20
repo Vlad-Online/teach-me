@@ -63,3 +63,18 @@ cargo run --release -p teach-me -- --now   # сразу открыть карт�
 - Выключить: `[sync] enabled = false` в `config.toml`.
 - Проверка без телефона: `cargo run --release -p harvester -- phone-sim --dir <папка>` — изображает телефон
   с пустой базой, находит ПК и синхронизируется.
+
+## Android-приложение
+
+```
+cd crates/mobile
+cargo tauri android build --apk --target aarch64            # релизный APK (~10 МБ)
+cargo tauri android build --debug --apk --target aarch64    # отладочный (~180 МБ)
+```
+
+APK: `crates/mobile/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`.
+
+Подпись: ключ `%USERPROFILE%\.teach-meelease.jks`, пароль — в `crates/mobile/gen/android/keystore.properties`
+(оба не в git). **Сохраните копию ключа**: обновление ставится поверх старой версии только с той же подписью;
+с новым ключом придётся удалять приложение (локальные данные телефона пропадут — перед этим синхронизироваться с ПК).
+

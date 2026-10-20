@@ -14,8 +14,26 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Release signing: gen/android/keystore.properties (not in git), key outside the repo.
+val keystoreProperties = Properties().apply {
+    val propFile = rootProject.file("keystore.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 37
+    signingConfigs {
+        create("release") {
+            if (keystoreProperties.containsKey("storeFile")) {
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+            }
+        }
+    }
     namespace = "local.teachme.mobile"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
@@ -39,6 +57,7 @@ android {
             }
         }
         getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
             optimization {
                enable = true
             }

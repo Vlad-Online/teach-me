@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod harvest;
 mod presence;
 mod recorder;
 
@@ -24,7 +25,7 @@ const PAIR: &str = "pair";
 const SETTINGS: &str = "settings";
 const TOAST_SIZE: (f64, f64) = (380.0, 128.0);
 const FULL_SIZE: (f64, f64) = (460.0, 640.0);
-const DIR: Direction = Direction::PtToRu;
+pub(crate) const DIR: Direction = Direction::PtToRu;
 
 struct Sched {
     next_popup: DateTime<Utc>,
@@ -38,10 +39,10 @@ struct Session {
     autostart: bool,
 }
 
-struct AppState {
-    home: Home,
+pub(crate) struct AppState {
+    pub(crate) home: Home,
     cfg: Config,
-    db: Mutex<Db>,
+    pub(crate) db: Mutex<Db>,
     /// Speech-to-text.
     api: Option<OpenAi>,
     /// Answer checking.
@@ -71,9 +72,9 @@ struct RecEvent {
     text: String,
 }
 
-type CmdResult<T> = Result<T, String>;
+pub(crate) type CmdResult<T> = Result<T, String>;
 
-fn err<E: std::fmt::Display>(e: E) -> String {
+pub(crate) fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
@@ -392,7 +393,7 @@ fn open_pairing(app: &AppHandle) {
 
 // ---------- settings ----------
 
-fn open_settings(app: &AppHandle) {
+pub(crate) fn open_settings(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(SETTINGS) {
         let _ = w.show();
         let _ = w.set_focus();
@@ -540,7 +541,7 @@ fn scheduler(app: AppHandle) {
     }
 }
 
-fn update_tray_tooltip(app: &AppHandle) {
+pub(crate) fn update_tray_tooltip(app: &AppHandle) {
     let st = app.state::<AppState>();
     let Ok(s) = st.db.lock().unwrap().stats(DIR) else { return };
     let paused = st.sched.lock().unwrap().paused_until.is_some_and(|p| p > Utc::now());
@@ -554,15 +555,21 @@ fn update_tray_tooltip(app: &AppHandle) {
         .and_then(|v| v.split_once(' ').and_then(|(_, ts)| ts.parse::<DateTime<Utc>>().ok()))
         .map(|t| format!("\nТелефон: синхр. {}", t.with_timezone(&Local).format("%d.%m %H:%M")))
         .unwrap_or_default();
+    let harvesting = app
+        .state::<harvest::Harvest>()
+        .tray_line()
+        .map(|l| format!("\n{l}"))
+        .unwrap_or_default();
     let text = format!(
-        "teach-me{}\nФраз: {} · новых: {}\nК повтору: {} · трудных: {}\nСегодня: {}{}",
+        "teach-me{}\nФраз: {} · новых: {}\nК повтору: {} · трудных: {}\nСегодня: {}{}{}",
         if paused { " (пауза)" } else { "" },
         s.phrases,
         s.unseen,
         s.due_now,
         s.difficult,
         s.reviewed_today,
-        last_sync
+        last_sync,
+        harvesting
     );
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(text));
@@ -626,6 +633,7 @@ fn main() {
                 .build(),
         )
         .manage(state)
+        .manage(harvest::Harvest::default())
         .invoke_handler(tauri::generate_handler![
             get_card,
             begin,
@@ -642,7 +650,14 @@ fn main() {
             save_settings,
             list_models,
             open_external,
-            show_pairing
+            show_pairing,
+            harvest::harvest_overview,
+            harvest::harvest_start,
+            harvest::harvest_stop,
+            harvest::tools_install,
+            harvest::sources_save,
+            harvest::source_probe,
+            harvest::show_settings
         ])
         .setup(|app| {
             // Menu bar only, no Dock icon.
@@ -661,10 +676,11 @@ fn main() {
             let resume_i = MenuItem::with_id(app, "resume", "Продолжить", true, None::<&str>)?;
             let pair_i = MenuItem::with_id(app, "pair", "Подключить телефон…", true, None::<&str>)?;
             let settings_i = MenuItem::with_id(app, "settings", "Настройки…", true, None::<&str>)?;
+            let harvest_i = MenuItem::with_id(app, "harvest", "База фраз…", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&now_i, &pause_i, &resume_i, &sep, &settings_i, &pair_i, &sep2, &quit_i])?;
+            let menu = Menu::with_items(app, &[&now_i, &pause_i, &resume_i, &sep, &harvest_i, &settings_i, &pair_i, &sep2, &quit_i])?;
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("teach-me")
@@ -683,6 +699,10 @@ fn main() {
                         "pair" => {
                             let app = app.clone();
                             std::thread::spawn(move || open_pairing(&app));
+                        }
+                        "harvest" => {
+                            let app = app.clone();
+                            std::thread::spawn(move || harvest::open_window(&app));
                         }
                         "settings" => {
                             let app = app.clone();
@@ -716,6 +736,10 @@ fn main() {
             if st.cfg.anthropic.api_key.trim().is_empty() && st.cfg.openai.api_key.trim().is_empty() {
                 let h = handle.clone();
                 std::thread::spawn(move || open_settings(&h));
+            } else if st.db.lock().unwrap().stats(DIR).map(|s| s.phrases == 0).unwrap_or(false) {
+                // Keys are there but the base is empty: build it first.
+                let h = handle.clone();
+                std::thread::spawn(move || harvest::open_window(&h));
             }
             if std::env::args().any(|a| a == "--now") {
                 spawn_open_quiz(&handle, true);

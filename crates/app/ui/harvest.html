@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>База фраз</title>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f4f5f7; --text: #1d1f23; --muted: #6b7280; --border: #e3e5e9;
+    --accent: #0b6e4f; --accent-text: #ffffff; --ok: #0b7a3e; --ok-bg: #e6f5ec;
+    --bad: #b42318; --bad-bg: #fde8e7; --warn: #9a6200; --warn-bg: #fff4dc; --focus: #0b6e4f33;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1d21; --panel: #26282d; --text: #ececee; --muted: #9a9ca3; --border: #34363c;
+      --accent: #2fa37a; --accent-text: #08130e; --ok: #5ad192; --ok-bg: #173325;
+      --bad: #ff8a80; --bad-bg: #3d1d1b; --warn: #f2bb4b; --warn-bg: #3a2f17; --focus: #2fa37a44;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 8px 24px 28px; }
+  h1 { font-size: 20px; margin: 18px 0 4px; }
+  h2 { font-size: 15px; margin: 24px 0 10px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12.5px; }
+  section { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .chip { background: var(--panel); border-radius: 999px; padding: 4px 12px; font-size: 13px; }
+  .chip b { font-weight: 700; }
+  button {
+    font: inherit; border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    border-radius: 8px; padding: 7px 14px; cursor: pointer; white-space: nowrap;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button.danger { color: var(--bad); }
+  button.link { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; }
+  button:disabled { opacity: .5; cursor: default; }
+  select, input[type=text] {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+  }
+  input[type=text] { flex: 1; min-width: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  [hidden] { display: none !important; }
+
+  .need { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+  .need ul { margin: 6px 0 10px; padding-left: 20px; }
+  .tools { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 12px; align-items: center; }
+  .tools .ok { color: var(--ok); }
+  .tools .no { color: var(--bad); }
+
+  .bar { height: 8px; border-radius: 999px; background: var(--panel); overflow: hidden; margin: 10px 0 6px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .bar.indeterminate > div { width: 30%; animation: slide 1.2s infinite ease-in-out; }
+  @keyframes slide { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+  .stage { font-weight: 600; }
+  .result { padding: 8px 12px; border-radius: 8px; font-weight: 600; margin-top: 10px; }
+  .result.ok { background: var(--ok-bg); color: var(--ok); }
+  .result.bad { background: var(--bad-bg); color: var(--bad); }
+  .added { max-height: 220px; overflow-y: auto; margin-top: 10px; border-top: 1px solid var(--border); }
+  .added div { padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .added .pt { font-weight: 600; }
+  .added .ru { color: var(--muted); }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  pre.log {
+    font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap;
+    background: var(--panel); border-radius: 8px; padding: 10px; max-height: 260px; overflow-y: auto; margin: 8px 0 0;
+  }
+
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 7px 4px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  td.url { color: var(--muted); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kind { font-size: 12px; background: var(--panel); border-radius: 999px; padding: 2px 8px; }
+  td.del { width: 1%; }
+  td.del button { padding: 2px 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>База фраз</h1>
+  <div class="muted">Фразы берутся из португальских YouTube-каналов: программа находит частые живые реплики,
+    вырезает клипы и переводит их.</div>
+  <div class="chips" id="chips"></div>
+
+  <!-- what is missing -->
+  <h2 id="need-title" hidden>Перед первым сбором</h2>
+  <section class="need" id="need" hidden>
+    <ul id="need-list"></ul>
+    <div class="row">
+      <button class="primary" id="install">Установить недостающие программы</button>
+      <button id="settings">Открыть настройки (ключи)</button>
+    </div>
+    <div class="small" id="install-note" style="margin-top: 8px"></div>
+  </section>
+
+  <!-- harvest -->
+  <h2>Собрать новые фразы</h2>
+  <section>
+    <div class="row">
+      Добавить
+      <select id="count">
+        <option value="10">10</option><option value="20">20</option><option value="30" selected>30</option>
+        <option value="50">50</option><option value="100">100</option>
+      </select>
+      новых фраз
+      <label class="row" style="gap: 6px"><input type="checkbox" id="find-new" checked> искать новые видео на каналах</label>
+    </div>
+    <div class="small muted" style="margin-top: 6px" id="estimate"></div>
+    <div class="row" style="margin-top: 12px">
+      <button class="primary" id="start">Собрать</button>
+      <button class="danger" id="stop" hidden>Остановить</button>
+    </div>
+
+    <div id="progress" hidden>
+      <div class="bar" id="bar"><div></div></div>
+      <div class="row" style="justify-content: space-between">
+        <span class="stage" id="stage"></span><span class="muted small" id="count-line"></span>
+      </div>
+      <div class="small muted" style="margin-top: 4px">Окно можно закрыть — сбор продолжится, прогресс виден на значке в трее.</div>
+    </div>
+    <div class="result" id="result" hidden></div>
+    <div class="added" id="added" hidden></div>
+    <details id="details" hidden>
+      <summary>Подробности</summary>
+      <pre class="log" id="log"></pre>
+    </details>
+  </section>
+
+  <!-- channels -->
+  <h2>Каналы</h2>
+  <section>
+    <div class="small muted" style="margin-bottom: 8px">Только каналы из Португалии: проверка отсеет бразильские видео,
+      но время на них потратится.</div>
+    <table><tbody id="sources"></tbody></table>
+    <div class="row" style="margin-top: 12px">
+      <input type="text" id="new-url" placeholder="Ссылка на канал YouTube: https://www.youtube.com/@…" spellcheck="false">
+      <select id="new-kind"><option value="news">новости</option><option value="show">шоу</option><option value="vlog" selected>влог</option></select>
+      <button id="add">Добавить</button>
+    </div>
+    <div class="small" id="add-line" style="margin-top: 6px"></div>
+  </section>
+</main>
+
+<script>
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+const $ = (id) => document.getElementById(id);
+let ov = null;
+const KIND = { news: 'новости', show: 'шоу', vlog: 'влог', file: 'файл' };
+
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+function renderOverview() {
+  const s = ov.stats;
+  $('chips').innerHTML =
+    `<span class="chip">фраз: <b>${s.phrases}</b></span>` +
+    `<span class="chip">ещё не изучено: <b>${s.unseen}</b></span>` +
+    `<span class="chip">видео в корпусе: <b>${ov.videos}</b></span>` +
+    `<span class="chip">уровень: <b>${esc(ov.level)}</b></span>`;
+
+  const toolsMissing = ov.tools.filter((t) => !t.found);
+  const keysMissing = ov.missing.filter((m) => m.startsWith('Нет ключа'));
+  const need = ov.missing.length > 0;
+  $('need').hidden = $('need-title').hidden = !need;
+  $('need-list').innerHTML = ov.missing.map((m) => `<li>${esc(m)}</li>`).join('');
+  $('install').hidden = toolsMissing.length === 0;
+  $('settings').hidden = keysMissing.length === 0;
+  $('install-note').textContent = toolsMissing.length
+    ? (ov.macos ? 'Установка через Homebrew (brew.sh).' : 'Установка через winget, бесплатно; вы соглашаетесь с лицензиями этих программ. Может появиться запрос Windows на разрешение.')
+    : '';
+  renderState(ov.state);
+  renderSources();
+}
+
+function renderState(st) {
+  const busy = st.running || !!st.installing;
+  $('start').disabled = busy || (ov && ov.missing.length > 0);
+  $('install').disabled = busy;
+  $('stop').hidden = !st.running;
+  $('progress').hidden = !busy;
+  if (st.installing) {
+    $('stage').textContent = `Устанавливаю ${st.installing}…`;
+    $('count-line').textContent = '';
+    $('bar').className = 'bar indeterminate';
+  } else if (st.running) {
+    $('stage').textContent = st.stage || 'Работаю…';
+    const det = st.total > 0;
+    $('bar').className = det ? 'bar' : 'bar indeterminate';
+    $('bar').firstElementChild.style.width = det ? `${Math.round((100 * st.done) / st.total)}%` : '';
+    $('count-line').textContent = det ? `${st.done} из ${st.total}` : '';
+  }
+  $('result').hidden = !st.result || busy;
+  if (st.result) {
+    $('result').className = 'result ' + (st.failed ? 'bad' : 'ok');
+    $('result').textContent = st.result;
+  }
+  $('added').hidden = st.added.length === 0;
+  $('added').innerHTML = st.added.slice().reverse()
+    .map(([pt, ru]) => `<div><div class="pt">${esc(pt)}</div><div class="ru">${esc(ru)}</div></div>`).join('');
+  $('details').hidden = st.log.length === 0;
+  const log = $('log');
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+  log.textContent = st.log.join('\n');
+  if (atBottom) log.scrollTop = log.scrollHeight;
+  if (!busy && ov && ov.state.running) refresh(); // just finished: update the numbers
+  if (ov) ov.state = st;
+}
+
+function renderSources() {
+  $('sources').innerHTML = ov.sources.map((s, i) => `
+    <tr>
+      <td><b>${esc(s.name)}</b></td>
+      <td><span class="kind">${KIND[s.kind] || esc(s.kind)}</span></td>
+      <td class="url" title="${esc(s.url)}">${esc(s.url)}</td>
+      <td class="del"><button data-del="${i}" title="Удалить">✕</button></td>
+    </tr>`).join('') || '<tr><td class="muted">Каналов нет — добавьте хотя бы один.</td></tr>';
+  document.querySelectorAll('[data-del]').forEach((b) => {
+    b.onclick = async () => {
+      const s = ov.sources[Number(b.dataset.del)];
+      if (!confirm(`Убрать канал «${s.name}»? Уже собранные из него фразы останутся.`)) return;
+      ov.sources.splice(Number(b.dataset.del), 1);
+      await invoke('sources_save', { list: ov.sources });
+      renderSources();
+    };
+  });
+}
+
+function updateEstimate() {
+  const n = Number($('count').value);
+  const mins = Math.round(n * 0.4 + ($('find-new').checked ? 4 : 1));
+  $('estimate').textContent = `Примерно ${mins}–${mins * 2} минут. Стоимость API — около ${Math.max(1, Math.round(n * 0.25))} центов.`;
+}
+
+async function refresh() {
+  try {
+    ov = await invoke('harvest_overview');
+    renderOverview();
+  } catch (e) {
+    $('result').hidden = false;
+    $('result').className = 'result bad';
+    $('result').textContent = String(e);
+  }
+}
+
+$('start').onclick = async () => {
+  try {
+    await invoke('harvest_start', { count: Number($('count').value), findNew: $('find-new').checked });
+  } catch (e) { alert(String(e)); }
+};
+$('stop').onclick = () => invoke('harvest_stop');
+$('settings').onclick = () => invoke('show_settings');
+$('install').onclick = async () => {
+  const ids = ov.tools.filter((t) => !t.found).map((t) => t.id);
+  try { await invoke('tools_install', { ids }); }
+  catch (e) { $('install-note').textContent = String(e); }
+  refresh();
+};
+$('count').onchange = updateEstimate;
+$('find-new').onchange = updateEstimate;
+
+$('add').onclick = async () => {
+  const url = $('new-url').value.trim();
+  const line = $('add-line');
+  if (!/^https?:\/\/(www\.|m\.)?youtube\.com\//.test(url)) {
+    line.style.color = 'var(--bad)';
+    line.textContent = 'Нужна ссылка на канал YouTube, например https://www.youtube.com/@RTPNoticias';
+    return;
+  }
+  if (ov.sources.some((s) => s.url === url)) { line.textContent = 'Этот канал уже есть'; return; }
+  line.style.color = '';
+  line.textContent = 'Проверяю ссылку…';
+  $('add').disabled = true;
+  try {
+    const name = await invoke('source_probe', { url });
+    const full = /\/(videos|streams|shorts)\/?$/.test(url) || url.includes('playlist') ? url : url.replace(/\/$/, '') + '/videos';
+    ov.sources.push({ name, kind: $('new-kind').value, url: full });
+    await invoke('sources_save', { list: ov.sources });
+    renderSources();
+    $('new-url').value = '';
+    line.style.color = 'var(--ok)';
+    line.textContent = `Добавлен канал «${name}»`;
+  } catch (e) {
+    line.style.color = 'var(--bad)';
+    line.textContent = String(e);
+  } finally {
+    $('add').disabled = false;
+  }
+};
+
+listen('harvest', ({ payload }) => renderState(payload));
+updateEstimate();
+refresh();
+</script>
+</body>
+</html>

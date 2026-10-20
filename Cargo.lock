@@ -4704,6 +4704,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "cpal",
+ "harvester",
  "hound",
  "qrcode",
  "serde",

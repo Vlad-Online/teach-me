@@ -15,10 +15,32 @@ pub fn watch_url(id: &str) -> String {
 }
 
 fn ytdlp() -> Command {
-    let mut c = Command::new("yt-dlp");
-    // YouTube needs a JS runtime for its player challenges; Node is installed.
-    c.args(["--js-runtimes", "node", "--no-warnings", "--no-progress"]);
+    let mut c = crate::tools::command("yt-dlp");
+    // YouTube needs a JS runtime for its player challenges.
+    if let Some(js) = crate::tools::js_runtime() {
+        c.args(["--js-runtimes", js]);
+    }
+    c.args(["--no-warnings", "--no-progress"]);
     c
+}
+
+/// Channel (or playlist) name for a link; fails if yt-dlp cannot open it.
+pub fn channel_title(url: &str) -> Result<String> {
+    let mut cmd = ytdlp();
+    cmd.args(["--flat-playlist", "-J", "--playlist-end", "1", url]);
+    let v = run_json(cmd)?;
+    let title = v["channel"]
+        .as_str()
+        .or_else(|| v["uploader"].as_str())
+        .or_else(|| v["title"].as_str())
+        .unwrap_or("")
+        .trim_end_matches(" - Videos")
+        .trim()
+        .to_string();
+    if title.is_empty() {
+        bail!("не удалось определить канал");
+    }
+    Ok(title)
 }
 
 fn run_json(mut cmd: Command) -> Result<Value> {

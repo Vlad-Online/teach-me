@@ -10,6 +10,7 @@ use teachme_core::llm::Llm;
 use teachme_core::openai::{OpenAi, Purpose};
 use teachme_core::{Config, Db, Home};
 
+use crate::report::{Event, Report};
 use crate::subs::{self, Utterance};
 use crate::{media, ytdlp};
 
@@ -147,7 +148,7 @@ const RATE_PROMPT: &str = "Ты отбираешь фразы для карто�
 Текст получен автоматическим распознаванием речи и может содержать ошибки. prev и next — соседние реплики, только для контекста.
 Верни оценку для каждого id.";
 
-pub fn rate(api: &Llm, cands: &mut [Candidate], level: &str) -> Result<()> {
+pub fn rate(api: &Llm, cands: &mut [Candidate], level: &str, r: &dyn Report) -> Result<()> {
     let schema = json!({
         "type": "object",
         "properties": {
@@ -165,8 +166,12 @@ pub fn rate(api: &Llm, cands: &mut [Candidate], level: &str) -> Result<()> {
         "additionalProperties": false
     });
     let system = RATE_PROMPT.replace("{level}", level);
+    let batches = cands.len().div_ceil(60);
     for (bi, chunk) in cands.chunks_mut(60).enumerate() {
-        eprintln!("  оценка фраз: пакет {} ({} шт.)", bi + 1, chunk.len());
+        if r.cancelled() {
+            return Ok(());
+        }
+        r.progress(bi, batches);
         let items: Vec<_> = chunk
             .iter()
             .enumerate()
@@ -315,7 +320,7 @@ fn safe_name(id: &str) -> String {
     id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
 }
 
-pub fn load_corpus(db: &Db, only_pt_pt: bool) -> Result<(Vec<SourceRow>, Vec<Vec<Utterance>>)> {
+pub fn load_corpus(db: &Db, only_pt_pt: bool, r: &dyn Report) -> Result<(Vec<SourceRow>, Vec<Vec<Utterance>>)> {
     let mut sources = vec![];
     let mut utts = vec![];
     for s in db.sources_with_subs(only_pt_pt)? {
@@ -325,7 +330,7 @@ pub fn load_corpus(db: &Db, only_pt_pt: bool) -> Result<(Vec<SourceRow>, Vec<Vec
                 sources.push(s);
                 utts.push(u);
             }
-            Err(e) => eprintln!("  пропуск {}: {e}", s.video_id),
+            Err(e) => r.log(format!("пропуск {}: {e}", s.video_id)),
         }
     }
     Ok((sources, utts))
@@ -345,7 +350,7 @@ pt-BR или mixed ставь только при явных признаках 
 
 /// Classifies every not-yet-checked video as pt-PT / pt-BR / mixed.
 /// Clips already cut from non-European videos are removed.
-pub fn check_variants(api: &Llm, home: &Home, db: &Db) -> Result<()> {
+pub fn check_variants(api: &Llm, home: &Home, db: &Db, r: &dyn Report) -> Result<()> {
     let schema = json!({
         "type": "object",
         "properties": {
@@ -357,14 +362,19 @@ pub fn check_variants(api: &Llm, home: &Home, db: &Db) -> Result<()> {
     });
     let unchecked = db.sources_unchecked()?;
     if !unchecked.is_empty() {
-        eprintln!("Проверка варианта языка: {} видео", unchecked.len());
+        r.stage(format!("Проверяю, что видео на европейском португальском ({})", unchecked.len()));
     }
-    for s in unchecked {
+    let total = unchecked.len();
+    for (i, s) in unchecked.into_iter().enumerate() {
+        if r.cancelled() {
+            return Ok(());
+        }
+        r.progress(i, total);
         let Some(file) = &s.subs_file else { continue };
         let utts = match subs::load(Path::new(file)) {
             Ok(u) => u,
             Err(e) => {
-                eprintln!("  пропуск {}: {e}", s.video_id);
+                r.log(format!("пропуск {}: {e}", s.video_id));
                 continue;
             }
         };
@@ -381,12 +391,12 @@ pub fn check_variants(api: &Llm, home: &Home, db: &Db) -> Result<()> {
         let variant = v["variant"].as_str().unwrap_or("mixed").to_string();
         db.set_source_variant(&s.video_id, &variant)?;
         if variant == "pt-PT" {
-            eprintln!("  ✓ pt-PT  {} — {}", s.channel, s.title);
+            r.log(format!("✓ pt-PT: {} — {}", s.channel, s.title));
         } else {
-            eprintln!("  ✗ {variant}  {} — {} ({})", s.channel, s.title, v["evidence"].as_str().unwrap_or(""));
+            r.log(format!("✗ {variant}, пропускаю: {} — {}", s.channel, s.title));
             for f in db.remove_source_clips(&s.url)? {
                 let _ = std::fs::remove_file(home.clips_dir().join(&f));
-                eprintln!("    удалён клип {f}");
+                r.log(format!("удалён клип {f}"));
             }
         }
     }
@@ -394,18 +404,22 @@ pub fn check_variants(api: &Llm, home: &Home, db: &Db) -> Result<()> {
 }
 
 /// Full mining run. Returns how many phrases were added.
-pub fn run(home: &Home, cfg: &Config, db: &Db, want: usize, dry_run: bool) -> Result<usize> {
+pub fn run(home: &Home, cfg: &Config, db: &Db, want: usize, dry_run: bool, r: &dyn Report) -> Result<usize> {
     // Text tasks go to the configured LLM; clip transcription always to OpenAI.
     let apis = if dry_run { None } else { Some((Llm::from_config(cfg)?, OpenAi::new(&cfg.openai)?)) };
     if let Some((llm, _)) = &apis {
-        check_variants(llm, home, db)?;
+        check_variants(llm, home, db, r)?;
     }
-    let (sources, utts) = load_corpus(db, !dry_run)?;
+    if r.cancelled() {
+        return Ok(0);
+    }
+    r.stage("Ищу частые фразы в субтитрах");
+    let (sources, utts) = load_corpus(db, !dry_run, r)?;
     let total_utts: usize = utts.iter().map(Vec::len).sum();
-    eprintln!("Корпус: {} видео, {} реплик", sources.len(), total_utts);
+    r.log(format!("Корпус: {} видео, {} реплик", sources.len(), total_utts));
     let known: HashSet<String> = db.known_norms()?.into_iter().collect();
     let mut cands = build_candidates(&utts, cfg, &known);
-    eprintln!("Подходящих кандидатов: {}", cands.len());
+    r.log(format!("Подходящих кандидатов: {}", cands.len()));
     cands.truncate((want * 8).clamp(60, 1000));
 
     if dry_run {
@@ -419,10 +433,20 @@ pub fn run(home: &Home, cfg: &Config, db: &Db, want: usize, dry_run: bool) -> Re
     // A cut already in the base can come back as a candidate: its ASR text differs
     // from the corrected text stored for the phrase. Never cut (and overwrite) it again.
     cands.retain(|c| !db.has_clip(&clip_file_name(&sources[c.source], c)).unwrap_or(false));
-    rate(&llm, &mut cands, &cfg.harvest.level)?;
+    if cands.is_empty() {
+        r.log("Новых фраз в субтитрах не осталось: включите поиск новых видео или добавьте каналы");
+        return Ok(0);
+    }
+    r.stage(format!("Оцениваю полезность {} фраз", cands.len()));
+    rate(&llm, &mut cands, &cfg.harvest.level, r)?;
+    if r.cancelled() {
+        return Ok(0);
+    }
     // A few spares: some phrases get dropped at the enrichment step.
     let picked = select(&cands, &sources, want + want / 2 + 2);
-    eprintln!("Отобрано для нарезки: {}", picked.len());
+    r.log(format!("Отобрано для нарезки: {}", picked.len()));
+    r.stage("Нарезаю клипы и перевожу");
+    r.progress(0, want);
 
     let clips_dir = home.clips_dir();
     std::fs::create_dir_all(&clips_dir)?;
@@ -439,14 +463,17 @@ pub fn run(home: &Home, cfg: &Config, db: &Db, want: usize, dry_run: bool) -> Re
         if added >= want {
             break;
         }
+        if r.cancelled() {
+            break;
+        }
         let src = &sources[si];
         let is_remote = src.url.starts_with("http");
-        eprintln!("▶ {} — {}", src.channel, src.title);
+        r.log(format!("Видео: {} — {}", src.channel, src.title));
         let video: PathBuf = if is_remote {
             match ytdlp::download_video(&src.video_id, &videos_dir) {
                 Ok(p) => p,
                 Err(e) => {
-                    eprintln!("  не удалось скачать: {e}");
+                    r.log(format!("не удалось скачать: {e}"));
                     continue;
                 }
             }
@@ -454,16 +481,17 @@ pub fn run(home: &Home, cfg: &Config, db: &Db, want: usize, dry_run: bool) -> Re
             PathBuf::from(&src.url)
         };
         for c in picked.iter().filter(|c| c.source == si) {
-            if added >= want {
+            if added >= want || r.cancelled() {
                 break;
             }
-            match make_clip(&llm, &stt, cfg, db, &clips_dir, &video, src, c) {
-                Ok(Some(text)) => {
+            match make_clip(&llm, &stt, cfg, db, &clips_dir, &video, src, c, r) {
+                Ok(Some((pt, ru))) => {
                     added += 1;
-                    eprintln!("  ✓ [{added}/{want}] {text}");
+                    r.event(Event::Added { pt, ru, done: added, want });
+                    r.progress(added, want);
                 }
                 Ok(None) => {}
-                Err(e) => eprintln!("  ✗ {}: {e}", c.text),
+                Err(e) => r.log(format!("✗ {}: {e}", c.text)),
             }
         }
         db.set_source_status(&src.video_id, "mined")?;
@@ -483,33 +511,34 @@ fn make_clip(
     video: &Path,
     src: &SourceRow,
     c: &Candidate,
-) -> Result<Option<String>> {
+    r: &dyn Report,
+) -> Result<Option<(String, String)>> {
     let file = clip_file_name(src, c);
     let path = clips_dir.join(&file);
     let mid = (c.clip_start_ms + c.clip_end_ms) / 2;
     let blur = match burned_subs_band(llm, video, mid) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("  (проверка вшитых субтитров не удалась: {e})");
+            r.log(format!("(проверка вшитых субтитров не удалась: {e})"));
             None
         }
     };
     if let Some((top, bottom)) = blur {
         if bottom - top > 0.45 {
-            eprintln!("  – отброшено (текст на весь кадр): {}", c.text);
+            r.log(format!("– отброшено (текст на весь кадр): {}", c.text));
             return Ok(None);
         }
-        eprintln!("  размываю вшитые субтитры: {:.0}–{:.0}% высоты", top * 100.0, bottom * 100.0);
+        r.log(format!("размываю вшитые субтитры: {:.0}–{:.0}% высоты", top * 100.0, bottom * 100.0));
     }
     media::cut_clip(video, c.clip_start_ms, c.clip_end_ms, blur, &path)?;
-    let result = (|| -> Result<Option<String>> {
+    let result = (|| -> Result<Option<(String, String)>> {
         // No subtitle text in the prompt: it makes the model repeat ASR mistakes.
         let transcript = stt.transcribe(std::fs::read(&path)?, &file, "pt", "Português europeu (Portugal).")?;
         let e = enrich(llm, c, &transcript, &cfg.harvest.level)?;
         let distinct: HashSet<String> = tokens(&normalize(&e.text_pt)).into_iter().map(String::from).collect();
         let fragment = e.text_pt.ends_with("...") || e.text_pt.ends_with('…');
         if !e.keep || e.text_ru.is_empty() || distinct.len() < 3 || fragment || has_stutter(&e.text_pt) {
-            eprintln!("  – отброшено: {}", c.text);
+            r.log(format!("– отброшено: {}", c.text));
             return Ok(None);
         }
         let clip = NewClip {
@@ -532,7 +561,7 @@ fn make_clip(
             })?,
         };
         db.insert_clip(phrase_id, &clip)?;
-        Ok(Some(format!("{}  →  {}", e.text_pt, e.text_ru)))
+        Ok(Some((e.text_pt.clone(), e.text_ru.clone())))
     })();
     if !matches!(result, Ok(Some(_))) {
         let _ = std::fs::remove_file(&path);

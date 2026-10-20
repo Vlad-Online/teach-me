@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Quiz window",
-  "windows": ["quiz", "pair", "settings"],
+  "windows": ["quiz", "pair", "settings", "harvest"],
   "permissions": ["core:default"]
 }

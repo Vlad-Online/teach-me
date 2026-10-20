@@ -1,14 +1,7 @@
-mod media;
-mod mine;
-mod subs;
-mod ytdlp;
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use serde::Deserialize;
-use std::path::Path;
 
-use teachme_core::db::SourceRow;
+use harvester::{media, mine, sources, tools, Console};
 use teachme_core::openai::OpenAi;
 use teachme_core::{Config, Db, Direction, Home};
 
@@ -54,37 +47,23 @@ enum Cmd {
     },
 }
 
-#[derive(Deserialize)]
-struct SourcesFile {
-    source: Vec<SourceCfg>,
-}
-
-#[derive(Deserialize)]
-struct SourceCfg {
-    name: String,
-    kind: String,
-    url: String,
-    max_videos: Option<usize>,
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let home = Home::locate()?;
     let cfg = home.load_config()?;
     let db = Db::open(&home.db_path())?;
+    tools::refresh_path();
     match cli.cmd {
-        Cmd::Discover => discover(&home, &cfg, &db)?,
-        Cmd::Import => import(&home, &cfg, &db)?,
+        Cmd::Discover => sources::discover(&home, &cfg, &db, &Console)?,
+        Cmd::Import => sources::import(&home, &cfg, &db, &Console)?,
         Cmd::Mine { count, dry_run } => {
-            let n = mine::run(&home, &cfg, &db, count, dry_run)?;
+            let n = mine::run(&home, &cfg, &db, count, dry_run, &Console)?;
             if !dry_run {
                 eprintln!("Готово: добавлено фраз {n}");
             }
         }
         Cmd::Run { count } => {
-            discover(&home, &cfg, &db)?;
-            import(&home, &cfg, &db)?;
-            let n = mine::run(&home, &cfg, &db, count, false)?;
+            let n = harvester::harvest(&home, &cfg, count, true, &Console)?;
             eprintln!("Готово: добавлено фраз {n}");
         }
         Cmd::CheckApi => check_api(&home, &cfg, &db)?,
@@ -107,72 +86,6 @@ fn main() -> Result<()> {
         Cmd::Stats => {
             let s = db.stats(Direction::PtToRu)?;
             println!("{}", serde_json::to_string_pretty(&s)?);
-        }
-    }
-    Ok(())
-}
-
-fn discover(home: &Home, cfg: &Config, db: &Db) -> Result<()> {
-    let text = std::fs::read_to_string(home.sources_path()).context("reading sources.toml")?;
-    let file: SourcesFile = toml::from_str(&text).context("parsing sources.toml")?;
-    let subs_dir = home.cache_dir().join("subs");
-    std::fs::create_dir_all(&subs_dir)?;
-    let http = reqwest::blocking::Client::new();
-    let h = &cfg.harvest;
-    for src in &file.source {
-        eprintln!("▶ {}", src.name);
-        let videos = match ytdlp::list_videos(&src.url, src.max_videos.unwrap_or(h.videos_per_source)) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("  ошибка: {e}");
-                continue;
-            }
-        };
-        for v in videos {
-            if db.source_status(&v.id)?.is_some() {
-                continue;
-            }
-            let mins = v.duration / 60.0;
-            if v.duration > 0.0 && (mins < h.min_video_minutes || mins > h.max_video_minutes) {
-                continue;
-            }
-            let mut row = SourceRow {
-                video_id: v.id.clone(),
-                url: ytdlp::watch_url(&v.id),
-                channel: src.name.clone(),
-                title: v.title.clone(),
-                kind: src.kind.clone(),
-                duration: v.duration,
-                subs_file: None,
-                status: "skip".into(),
-            };
-            let info = match ytdlp::video_info(&v.id) {
-                Ok(i) => i,
-                Err(e) => {
-                    eprintln!("  {}: {e}", v.id);
-                    continue;
-                }
-            };
-            if let Some(t) = info["title"].as_str() {
-                row.title = t.to_string();
-            }
-            match ytdlp::choose_subs(&info) {
-                Some((track, url)) => {
-                    let path = subs_dir.join(format!("{}.json3", v.id));
-                    let body = http.get(&url).send().and_then(|r| r.error_for_status()).and_then(|r| r.bytes());
-                    match body {
-                        Ok(b) => {
-                            std::fs::write(&path, &b)?;
-                            row.subs_file = Some(path.to_string_lossy().into_owned());
-                            row.status = "new".into();
-                            eprintln!("  + {} [{track}] {}", v.id, row.title);
-                        }
-                        Err(e) => eprintln!("  {}: субтитры не скачались: {e}", v.id),
-                    }
-                }
-                None => eprintln!("  – {} не на португальском или без субтитров", v.id),
-            }
-            db.upsert_source(&row)?;
         }
     }
     Ok(())
@@ -251,86 +164,6 @@ fn check_api(home: &Home, cfg: &Config, db: &Db) -> Result<()> {
         let t = Instant::now();
         let text = stt.transcribe(std::fs::read(home.clips_dir().join(&file))?, &file, "pt", "Português europeu (Portugal).")?;
         println!("  [{:.1} c] {file}: {text}", t.elapsed().as_secs_f64());
-    }
-    Ok(())
-}
-
-const VIDEO_EXT: &[&str] = &["mp4", "mkv", "webm", "avi", "mov", "m4v"];
-
-fn sidecar_subs(video: &Path) -> Option<std::path::PathBuf> {
-    let dir = video.parent()?;
-    let stem = video.file_stem()?.to_string_lossy().to_string();
-    let mut found = None;
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
-        let p = entry.path();
-        let name = p.file_name()?.to_string_lossy().to_string();
-        let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-        if (ext == "srt" || ext == "vtt") && name.starts_with(&stem) {
-            // Prefer tracks marked as Portuguese: movie.pt.srt, movie.por.srt
-            let lname = name.to_lowercase();
-            if lname.contains(".pt") || lname.contains(".por") {
-                return Some(p);
-            }
-            found.get_or_insert(p);
-        }
-    }
-    found
-}
-
-fn import(home: &Home, cfg: &Config, db: &Db) -> Result<()> {
-    let inbox = home.inbox_dir();
-    std::fs::create_dir_all(&inbox)?;
-    let subs_dir = home.cache_dir().join("subs");
-    std::fs::create_dir_all(&subs_dir)?;
-    let mut api: Option<OpenAi> = None;
-    for entry in std::fs::read_dir(&inbox)?.flatten() {
-        let path = entry.path();
-        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-        if !VIDEO_EXT.contains(&ext.as_str()) {
-            continue;
-        }
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let id = format!("file:{name}");
-        if db.source_status(&id)?.is_some() {
-            continue;
-        }
-        eprintln!("▶ inbox: {name}");
-        let subs_file = match sidecar_subs(&path) {
-            Some(s) => s,
-            None => {
-                if api.is_none() {
-                    api = Some(OpenAi::new(&cfg.openai)?);
-                }
-                eprintln!("  субтитров нет — распознаю речь (whisper)");
-                let tmp = home.cache_dir().join("audio");
-                let mut cues = vec![];
-                for (offset, chunk) in media::audio_chunks(&path, &tmp, 20.0 * 60.0)? {
-                    let v = api.as_ref().unwrap().transcribe_segments(std::fs::read(&chunk)?, "audio.mp3", "pt")?;
-                    for s in v["segments"].as_array().into_iter().flatten() {
-                        cues.push(subs::Cue {
-                            start_ms: ((offset + s["start"].as_f64().unwrap_or(0.0)) * 1000.0) as i64,
-                            end_ms: ((offset + s["end"].as_f64().unwrap_or(0.0)) * 1000.0) as i64,
-                            text: s["text"].as_str().unwrap_or_default().trim().to_string(),
-                        });
-                    }
-                    let _ = std::fs::remove_file(&chunk);
-                }
-                let safe: String = name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
-                let out = subs_dir.join(format!("{safe}.cues.json"));
-                std::fs::write(&out, serde_json::to_string(&cues)?)?;
-                out
-            }
-        };
-        db.upsert_source(&SourceRow {
-            video_id: id,
-            url: path.to_string_lossy().into_owned(),
-            channel: "Свои файлы".into(),
-            title: name,
-            kind: "file".into(),
-            duration: media::duration_secs(&path).unwrap_or(0.0),
-            subs_file: Some(subs_file.to_string_lossy().into_owned()),
-            status: "new".into(),
-        })?;
     }
     Ok(())
 }

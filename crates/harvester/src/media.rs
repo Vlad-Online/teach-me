@@ -11,7 +11,7 @@ fn run(cmd: &mut Command, what: &str) -> Result<()> {
 }
 
 pub fn duration_secs(path: &Path) -> Result<f64> {
-    let out = Command::new("ffprobe")
+    let out = crate::tools::command("ffprobe")
         .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
         .arg(path)
         .output()
@@ -24,7 +24,7 @@ pub fn duration_secs(path: &Path) -> Result<f64> {
 
 /// One video frame as JPEG (512 px wide), for the burned-in subtitle check.
 pub fn frame_jpeg(video: &Path, at_ms: i64) -> Result<Vec<u8>> {
-    let out = Command::new("ffmpeg")
+    let out = crate::tools::command("ffmpeg")
         .args(["-v", "error", "-ss", &format!("{:.3}", at_ms as f64 / 1000.0), "-i"])
         .arg(video)
         .args(["-frames:v", "1", "-vf", "scale=512:-2", "-q:v", "5", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"])
@@ -56,7 +56,7 @@ pub fn cut_clip(video: &Path, start_ms: i64, end_ms: i64, blur: Option<(f64, f64
         }
     };
     run(
-        Command::new("ffmpeg")
+        crate::tools::command("ffmpeg")
             .args(["-y", "-v", "error", "-ss", &format!("{start:.3}"), "-i"])
             .arg(video)
             .args([
@@ -100,7 +100,7 @@ pub fn audio_chunks(video: &Path, dir: &Path, chunk_secs: f64) -> Result<Vec<(f6
     while t < total {
         let out = dir.join(format!("chunk{i:03}.mp3"));
         run(
-            Command::new("ffmpeg")
+            crate::tools::command("ffmpeg")
                 .args(["-y", "-v", "error", "-ss", &format!("{t:.3}"), "-i"])
                 .arg(video)
                 .args(["-t", &format!("{chunk_secs:.3}"), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k"])

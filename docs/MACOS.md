@@ -13,9 +13,6 @@ xcode-select --install
 # Homebrew — менеджер пакетов (если ещё нет): https://brew.sh
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# ffmpeg (нарезка клипов), yt-dlp (скачивание с YouTube), node (нужен yt-dlp для YouTube)
-brew install ffmpeg yt-dlp node
-
 # Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
@@ -30,9 +27,7 @@ cargo install tauri-cli --version "^2" --locked
 
 ```bash
 git clone https://github.com/Vlad-Online/teach-me.git ~/src/teach-me
-cd ~/src/teach-me
-cargo build --release -p harvester                      # сборщик базы фраз
-cd crates/app && cargo tauri build --bundles app,dmg    # приложение
+cd ~/src/teach-me/crates/app && cargo tauri build --bundles app,dmg
 ```
 
 Готовое приложение: `target/release/bundle/macos/teach-me.app`
@@ -51,18 +46,20 @@ cd crates/app && cargo tauri build --bundles app,dmg    # приложение
 
 ## 4. Первая база фраз
 
-```bash
-cd ~/teach-me
-~/src/teach-me/target/release/harvester check-api     # проверить ключи
-~/src/teach-me/target/release/harvester run -c 30     # найти видео и нарезать 30 фраз (~15 минут)
-```
+После того как ключи сохранены, приложение само откроет окно **«База фраз»**
+(потом — значок в строке меню → «База фраз…»):
+1. **«Установить недостающие программы»** — поставит через Homebrew yt-dlp, FFmpeg и Deno
+   (нужны для скачивания и нарезки видео).
+2. **«Собрать 30 новых фраз»** — около 15 минут. Окно можно закрыть: сбор продолжится,
+   прогресс виден в подсказке значка.
 
+Там же — список YouTube-каналов: добавить по ссылке или удалить.
 Клипы и база лежат в `~/teach-me/data`.
 
 ## 5. Как пользоваться
 
 - Значок teach-me появляется в **строке меню** (вверху справа), в Доке его нет.
-- Карточка всплывает раз в 25 минут (настраивается в `config.toml`, раздел `[trainer]`).
+- Карточка всплывает раз в 25 минут (меняется в «Настройках»).
 - **⌥ Option + Пробел** (держать) — ответ голосом; отпустить — отправить.
   На Mac `Ctrl+Пробел` занят переключением раскладки, поэтому другая клавиша.
 - **⌃ Ctrl + ⌥ Option + P** — карточка прямо сейчас. Клик по значку — то же самое.
@@ -90,7 +87,6 @@ Mac-версия собрана по документации, но на нас�
 
 ```bash
 cd ~/src/teach-me && git pull
-cargo build --release -p harvester
 cd crates/app && cargo tauri build --bundles app,dmg
 ```
 и заменить `teach-me.app` в «Программах» на новый из `target/release/bundle/macos/`.

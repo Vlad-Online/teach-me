@@ -74,7 +74,7 @@ cargo tauri android build --debug --apk --target aarch64    # отладочны
 
 APK: `crates/mobile/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`.
 
-Подпись: ключ `%USERPROFILE%\.teach-meelease.jks`, пароль — в `crates/mobile/gen/android/keystore.properties`
+Подпись: ключ `%USERPROFILE%\.teach-me\release.jks`, пароль — в `crates/mobile/gen/android/keystore.properties`
 (оба не в git). **Сохраните копию ключа**: обновление ставится поверх старой версии только с той же подписью;
 с новым ключом придётся удалять приложение (локальные данные телефона пропадут — перед этим синхронизироваться с ПК).
 

@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Настройки</title>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f4f5f7; --text: #1d1f23; --muted: #6b7280; --border: #e3e5e9;
+    --accent: #0b6e4f; --accent-text: #ffffff; --ok: #0b7a3e; --bad: #b42318; --focus: #0b6e4f33;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1d21; --panel: #26282d; --text: #ececee; --muted: #9a9ca3; --border: #34363c;
+      --accent: #2fa37a; --accent-text: #08130e; --ok: #5ad192; --bad: #ff8a80; --focus: #2fa37a44;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; height: 100vh; }
+  main { flex: 1; overflow-y: auto; padding: 8px 24px 24px; }
+  footer { display: flex; gap: 10px; align-items: center; padding: 12px 24px; border-top: 1px solid var(--border); }
+  footer .msg { flex: 1; font-size: 13px; color: var(--bad); }
+  h2 { font-size: 15px; margin: 22px 0 10px; }
+  section { border: 1px solid var(--border); border-radius: 12px; padding: 4px 16px; }
+  .field { display: grid; grid-template-columns: 210px 1fr; gap: 6px 14px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .field:last-child { border-bottom: 0; }
+  .field > label { font-weight: 500; }
+  .field .hint { grid-column: 2; font-size: 12.5px; color: var(--muted); margin-top: -2px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  input[type=text], input[type=password], input[type=number], select {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; min-width: 0;
+  }
+  input[type=text], input[type=password], select { width: 100%; }
+  input[type=number] { width: 80px; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
+  input.hotkey { cursor: pointer; font-weight: 600; text-align: center; }
+  input.hotkey.recording { border-color: var(--accent); color: var(--accent); }
+  button {
+    font: inherit; border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    border-radius: 8px; padding: 6px 12px; cursor: pointer; white-space: nowrap;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; padding: 8px 18px; }
+  button.link { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font-size: 12.5px; }
+  .status { font-size: 12.5px; }
+  .status.ok { color: var(--ok); }
+  .status.bad { color: var(--bad); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: var(--bg); }
+  .seg button.on { background: var(--accent); color: var(--accent-text); }
+  .switch { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h2>Ключи API</h2>
+  <section>
+    <div class="field">
+      <label for="anthropic-key">Claude (Anthropic)</label>
+      <div class="row">
+        <input type="password" id="anthropic-key" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+        <button data-reveal="anthropic-key" title="Показать">👁</button>
+        <button id="anthropic-check">Проверить</button>
+      </div>
+      <div class="hint">Перевод фраз и проверка ответов. <span class="status" id="anthropic-status"></span>
+        <button class="link" data-url="https://console.anthropic.com/settings/keys">Где взять ключ</button></div>
+    </div>
+    <div class="field">
+      <label for="openai-key">OpenAI</label>
+      <div class="row">
+        <input type="password" id="openai-key" placeholder="sk-…" autocomplete="off" spellcheck="false">
+        <button data-reveal="openai-key" title="Показать">👁</button>
+        <button id="openai-check">Проверить</button>
+      </div>
+      <div class="hint">Распознавание голоса. <span class="status" id="openai-status"></span>
+        <button class="link" data-url="https://platform.openai.com/api-keys">Где взять ключ</button></div>
+    </div>
+  </section>
+
+  <h2>Модели</h2>
+  <section>
+    <div class="field">
+      <label>Перевод и проверка</label>
+      <div class="seg" id="provider">
+        <button data-v="anthropic">Claude</button><button data-v="openai">OpenAI</button>
+      </div>
+    </div>
+    <div id="anthropic-models">
+      <div class="field">
+        <label for="a-enrich">Сбор базы</label>
+        <div class="row">
+          <input type="text" id="a-enrich" list="anthropic-list" spellcheck="false">
+          <select id="a-enrich-effort" style="width: 170px">
+            <option value="low">думать мало</option><option value="medium">думать средне</option><option value="high">думать много</option>
+          </select>
+        </div>
+        <div class="hint">Перевод и разбор новых фраз. Haiku — быстро и дёшево; Sonnet/Opus — точнее и дороже.</div>
+      </div>
+      <div class="field">
+        <label for="a-judge">Проверка ответов</label>
+        <div class="row">
+          <input type="text" id="a-judge" list="anthropic-list" spellcheck="false">
+          <label class="switch" style="width: 170px"><input type="checkbox" id="a-judge-thinking"> рассуждать</label>
+        </div>
+        <div class="hint">Пока вы ждёте вердикт. Без рассуждения — около секунды.</div>
+      </div>
+    </div>
+    <div id="openai-models" hidden>
+      <div class="field">
+        <label for="o-enrich">Сбор базы</label>
+        <div class="row">
+          <input type="text" id="o-enrich" list="openai-text-list" spellcheck="false">
+          <select id="o-enrich-reasoning" style="width: 170px">
+            <option value="">без рассуждения</option><option value="none">reasoning: none</option>
+            <option value="low">reasoning: low</option><option value="medium">reasoning: medium</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="o-judge">Проверка ответов</label>
+        <div class="row">
+          <input type="text" id="o-judge" list="openai-text-list" spellcheck="false">
+          <select id="o-judge-reasoning" style="width: 170px">
+            <option value="">без рассуждения</option><option value="none">reasoning: none</option>
+            <option value="low">reasoning: low</option>
+          </select>
+        </div>
+        <div class="hint">«Без рассуждения» — для классических моделей (gpt-4.1-mini), «none» — для рассуждающих (gpt-6-luna).</div>
+      </div>
+    </div>
+    <div class="field">
+      <label for="o-stt">Распознавание голоса</label>
+      <input type="text" id="o-stt" list="openai-stt-list" spellcheck="false">
+      <div class="hint">Модель OpenAI. gpt-4o-mini-transcribe — самая дешёвая.</div>
+    </div>
+  </section>
+
+  <h2>Тренажёр</h2>
+  <section>
+    <div class="field">
+      <label for="interval">Карточка всплывает</label>
+      <div class="row">раз в <input type="number" id="interval" min="5" max="600"> мин</div>
+    </div>
+    <div class="field">
+      <label for="relearn">Забытая фраза вернётся</label>
+      <div class="row">через <input type="number" id="relearn" min="1" max="600"> мин</div>
+    </div>
+    <div class="field">
+      <label>Активные часы</label>
+      <div class="row">с <input type="number" id="from" min="0" max="23"> до <input type="number" id="to" min="1" max="24"></div>
+    </div>
+    <div class="field">
+      <label for="new-per-day">Новых фраз в день</label>
+      <input type="number" id="new-per-day" min="1" max="200">
+    </div>
+    <div class="field">
+      <label for="idle">Не показывать, если меня нет</label>
+      <div class="row">дольше <input type="number" id="idle" min="1" max="120"> мин</div>
+    </div>
+    <div class="field">
+      <label for="hotkey">Голосовой ответ (держать)</label>
+      <input type="text" class="hotkey" id="hotkey" readonly>
+      <div class="hint">Нажмите на поле, затем нужное сочетание.</div>
+    </div>
+    <div class="field">
+      <label for="card-now">Карточка прямо сейчас</label>
+      <input type="text" class="hotkey" id="card-now" readonly>
+    </div>
+  </section>
+
+  <h2>Телефон</h2>
+  <section>
+    <div class="field">
+      <label>Синхронизация</label>
+      <div class="row">
+        <label class="switch"><input type="checkbox" id="sync"> по Wi-Fi с телефоном</label>
+        <button id="pair" style="margin-left: auto">Подключить телефон…</button>
+      </div>
+    </div>
+  </section>
+
+  <h2>Сбор базы</h2>
+  <section>
+    <div class="field">
+      <label for="level">Мой уровень</label>
+      <select id="level" style="width: 200px">
+        <option value="A1">A1 — начальный</option><option value="A2">A2</option>
+        <option value="A2-B1">A2–B1</option><option value="B1">B1</option>
+        <option value="B1-B2">B1–B2</option><option value="B2">B2 и выше</option>
+      </select>
+      <div class="hint">Под него подбираются и оцениваются фразы. <button class="link" id="sources">Список YouTube-каналов</button></div>
+    </div>
+  </section>
+
+  <h2>Система</h2>
+  <section>
+    <div class="field">
+      <label>Автозапуск</label>
+      <label class="switch"><input type="checkbox" id="autostart"> <span id="autostart-label">запускать при входе в систему</span></label>
+    </div>
+    <div class="field">
+      <label>Файл настроек</label>
+      <div class="row"><span class="status" id="path" style="overflow-wrap: anywhere"></span></div>
+      <div class="hint">Всё, что здесь не показано (порты, пороги отбора фраз), можно поменять в нём вручную.
+        <button class="link" id="folder">Открыть папку</button></div>
+    </div>
+  </section>
+</main>
+<footer>
+  <span class="msg" id="msg"></span>
+  <button id="cancel">Отмена</button>
+  <button class="primary" id="save">Сохранить</button>
+</footer>
+
+<datalist id="anthropic-list">
+  <option value="claude-haiku-5-5"><option value="claude-sonnet-5-5"><option value="claude-opus-5-5">
+</datalist>
+<datalist id="openai-text-list">
+  <option value="gpt-6-luna"><option value="gpt-6.1-sol"><option value="gpt-4.1-mini">
+</datalist>
+<datalist id="openai-stt-list">
+  <option value="gpt-4o-mini-transcribe"><option value="gpt-4o-transcribe"><option value="gpt-transcribe"><option value="whisper-1">
+</datalist>
+
+<script>
+const { invoke } = window.__TAURI__.core;
+const $ = (id) => document.getElementById(id);
+let cfg = null;
+let provider = 'anthropic';
+
+function setProvider(p) {
+  provider = p;
+  document.querySelectorAll('#provider button').forEach((b) => b.classList.toggle('on', b.dataset.v === p));
+  $('anthropic-models').hidden = p !== 'anthropic';
+  $('openai-models').hidden = p !== 'openai';
+}
+
+function fill(s) {
+  cfg = s.config;
+  const c = cfg;
+  $('anthropic-key').value = c.anthropic.api_key;
+  $('openai-key').value = c.openai.api_key;
+  setProvider(c.llm.provider === 'openai' ? 'openai' : 'anthropic');
+  $('a-enrich').value = c.anthropic.enrich_model;
+  $('a-enrich-effort').value = c.anthropic.enrich_effort;
+  $('a-judge').value = c.anthropic.judge_model;
+  $('a-judge-thinking').checked = c.anthropic.judge_thinking;
+  $('o-enrich').value = c.openai.enrich_model;
+  $('o-enrich-reasoning').value = c.openai.enrich_reasoning;
+  $('o-judge').value = c.openai.judge_model;
+  $('o-judge-reasoning').value = c.openai.judge_reasoning;
+  $('o-stt').value = c.openai.transcribe_model;
+  $('interval').value = c.trainer.interval_minutes;
+  $('relearn').value = c.trainer.relearn_minutes;
+  $('from').value = c.trainer.active_from_hour;
+  $('to').value = c.trainer.active_to_hour;
+  $('new-per-day').value = c.trainer.new_per_day;
+  $('idle').value = c.trainer.idle_minutes;
+  $('hotkey').value = c.trainer.hotkey;
+  $('card-now').value = c.trainer.card_now_hotkey;
+  $('sync').checked = c.sync.enabled;
+  if (![...$('level').options].some((o) => o.value === c.harvest.level)) {
+    $('level').add(new Option(c.harvest.level, c.harvest.level));
+  }
+  $('level').value = c.harvest.level;
+  $('autostart').checked = s.autostart;
+  $('autostart-label').textContent = s.macos ? 'запускать при входе в macOS' : 'запускать при входе в Windows';
+  $('path').textContent = s.config_path;
+}
+
+const num = (id) => Math.round(Number($(id).value));
+
+function collect() {
+  const c = structuredClone(cfg);
+  c.anthropic.api_key = $('anthropic-key').value.trim();
+  c.openai.api_key = $('openai-key').value.trim();
+  c.llm.provider = provider;
+  c.anthropic.enrich_model = $('a-enrich').value.trim();
+  c.anthropic.enrich_effort = $('a-enrich-effort').value;
+  c.anthropic.judge_model = $('a-judge').value.trim();
+  c.anthropic.judge_thinking = $('a-judge-thinking').checked;
+  c.openai.enrich_model = $('o-enrich').value.trim();
+  c.openai.enrich_reasoning = $('o-enrich-reasoning').value;
+  c.openai.judge_model = $('o-judge').value.trim();
+  c.openai.judge_reasoning = $('o-judge-reasoning').value;
+  c.openai.transcribe_model = $('o-stt').value.trim();
+  c.trainer.interval_minutes = num('interval');
+  c.trainer.relearn_minutes = num('relearn');
+  c.trainer.active_from_hour = num('from');
+  c.trainer.active_to_hour = num('to');
+  c.trainer.new_per_day = num('new-per-day');
+  c.trainer.idle_minutes = num('idle');
+  c.trainer.hotkey = $('hotkey').value;
+  c.trainer.card_now_hotkey = $('card-now').value;
+  c.sync.enabled = $('sync').checked;
+  c.harvest.level = $('level').value;
+  return c;
+}
+
+// ---------- key check: also fills the model lists ----------
+
+function fillList(id, models) {
+  const dl = $(id);
+  dl.innerHTML = '';
+  models.forEach((m) => dl.appendChild(new Option(m)));
+}
+
+async function checkKey(which) {
+  const key = $(which + '-key').value.trim();
+  const st = $(which + '-status');
+  if (!key) { st.className = 'status bad'; st.textContent = 'ключ не введён'; return; }
+  st.className = 'status'; st.textContent = 'проверяю…';
+  try {
+    const models = await invoke('list_models', { provider: which, key });
+    st.className = 'status ok';
+    st.textContent = `✓ ключ работает (моделей: ${models.length})`;
+    if (which === 'anthropic') {
+      fillList('anthropic-list', models.filter((m) => m.startsWith('claude-')));
+    } else {
+      fillList('openai-text-list', models.filter((m) => /^(gpt-|o\d)/.test(m) && !/transcribe|tts|audio|realtime|image|search|embedding|live|translate/.test(m)));
+      fillList('openai-stt-list', models.filter((m) => /transcribe|whisper/.test(m)));
+    }
+  } catch (e) {
+    st.className = 'status bad';
+    st.textContent = '✗ ' + String(e);
+  }
+}
+$('anthropic-check').onclick = () => checkKey('anthropic');
+$('openai-check').onclick = () => checkKey('openai');
+
+document.querySelectorAll('[data-reveal]').forEach((b) => {
+  b.onclick = () => { const i = $(b.dataset.reveal); i.type = i.type === 'password' ? 'text' : 'password'; };
+});
+document.querySelectorAll('[data-url]').forEach((b) => { b.onclick = () => invoke('open_external', { target: b.dataset.url }); });
+document.querySelectorAll('#provider button').forEach((b) => { b.onclick = () => setProvider(b.dataset.v); });
+$('sources').onclick = () => invoke('open_external', { target: 'sources' });
+$('folder').onclick = () => invoke('open_external', { target: 'folder' });
+$('pair').onclick = () => invoke('show_pairing');
+
+// ---------- hotkey capture ----------
+
+const MODS = ['Control', 'Alt', 'Shift', 'Meta'];
+function comboFromEvent(e) {
+  if (MODS.includes(e.key)) return null;
+  const parts = [];
+  if (e.ctrlKey) parts.push('Ctrl');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+  if (e.metaKey) parts.push('Super');
+  let key = e.code;
+  if (/^Key[A-Z]$/.test(key)) key = key.slice(3);
+  else if (/^Digit\d$/.test(key)) key = key.slice(5);
+  const fkey = /^F\d+$/.test(key);
+  if (!parts.length && !fkey) return null; // a bare key would fire while typing
+  parts.push(key);
+  return parts.join('+');
+}
+document.querySelectorAll('input.hotkey').forEach((input) => {
+  let before = '';
+  input.addEventListener('focus', () => { before = input.value; input.value = 'нажмите сочетание…'; input.classList.add('recording'); });
+  input.addEventListener('blur', () => { if (input.value === 'нажмите сочетание…') input.value = before; input.classList.remove('recording'); });
+  input.addEventListener('keydown', (e) => {
+    e.preventDefault();
+    if (e.key === 'Escape') { input.value = before; input.blur(); return; }
+    const combo = comboFromEvent(e);
+    if (combo) { input.value = combo; before = combo; input.blur(); }
+  });
+});
+
+// ---------- save ----------
+
+$('cancel').onclick = () => window.close();
+$('save').onclick = async () => {
+  $('msg').textContent = '';
+  $('save').disabled = true;
+  $('save').textContent = 'Сохраняю…';
+  try {
+    // On success the app restarts and this window closes.
+    await invoke('save_settings', { config: collect(), autostart: $('autostart').checked });
+  } catch (e) {
+    $('msg').textContent = String(e);
+    $('save').disabled = false;
+    $('save').textContent = 'Сохранить';
+  }
+};
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !document.activeElement.classList.contains('hotkey')) window.close();
+});
+
+invoke('get_settings').then(fill).catch((e) => { $('msg').textContent = String(e); });
+</script>
+</body>
+</html>

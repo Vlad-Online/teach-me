@@ -28,6 +28,24 @@ impl OpenAi {
         Ok(Self { cfg: cfg.clone(), http })
     }
 
+    /// Model ids available to this key. Also a free way to check the key.
+    pub fn list_models(base_url: &str, api_key: &str) -> Result<Vec<String>> {
+        let http = Client::builder().timeout(Duration::from_secs(20)).build()?;
+        let resp = http
+            .get(format!("{}/models", base_url.trim_end_matches('/')))
+            .bearer_auth(api_key.trim())
+            .send()?;
+        let body = Self::check(resp)?;
+        let mut ids: Vec<String> = body["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|m| m["id"].as_str().map(String::from))
+            .collect();
+        ids.sort();
+        Ok(ids)
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}/{}", self.cfg.base_url.trim_end_matches('/'), path)
     }

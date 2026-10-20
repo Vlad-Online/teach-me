@@ -16,10 +16,12 @@ use teachme_core::db::Stats;
 use teachme_core::judge::{self, Verdict};
 use teachme_core::llm::Llm;
 use teachme_core::openai::OpenAi;
+use tauri_plugin_autostart::ManagerExt;
 use teachme_core::{Config, Db, Direction, Home, Outcome, StudyCard};
 
 const QUIZ: &str = "quiz";
 const PAIR: &str = "pair";
+const SETTINGS: &str = "settings";
 const TOAST_SIZE: (f64, f64) = (380.0, 128.0);
 const FULL_SIZE: (f64, f64) = (460.0, 640.0);
 const DIR: Direction = Direction::PtToRu;
@@ -388,6 +390,110 @@ fn open_pairing(app: &AppHandle) {
         .build();
 }
 
+// ---------- settings ----------
+
+fn open_settings(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(SETTINGS) {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("settings.html".into()))
+        .title("teach-me — настройки")
+        .inner_size(620.0, 780.0)
+        .min_inner_size(480.0, 500.0)
+        .center()
+        .build();
+}
+
+#[derive(Serialize)]
+struct SettingsDto {
+    config: Config,
+    autostart: bool,
+    config_path: String,
+    macos: bool,
+}
+
+#[tauri::command]
+fn get_settings(app: AppHandle, st: State<AppState>) -> CmdResult<SettingsDto> {
+    Ok(SettingsDto {
+        // From the file: it may have been edited by hand since start.
+        config: st.home.load_config().map_err(err)?,
+        autostart: app.autolaunch().is_enabled().unwrap_or(false),
+        config_path: st.home.config_path().to_string_lossy().into_owned(),
+        macos: cfg!(target_os = "macos"),
+    })
+}
+
+/// Validates, writes config.toml and restarts the app to apply everything
+/// (hotkeys, API clients, sync server).
+#[tauri::command]
+fn save_settings(app: AppHandle, st: State<AppState>, config: Config, autostart: bool) -> CmdResult<()> {
+    let t = &config.trainer;
+    for (what, key) in [("для голоса", &t.hotkey), ("«карточка сейчас»", &t.card_now_hotkey)] {
+        key.parse::<Shortcut>()
+            .map_err(|_| format!("Горячая клавиша {what} «{key}» не распознана"))?;
+    }
+    if t.hotkey == t.card_now_hotkey {
+        return Err("Горячие клавиши для голоса и для карточки совпадают".into());
+    }
+    if t.active_from_hour >= t.active_to_hour || t.active_to_hour > 24 {
+        return Err("Активные часы: «с» должно быть меньше «до» (0–24)".into());
+    }
+    if t.interval_minutes == 0 || t.new_per_day == 0 {
+        return Err("Интервал и число новых фраз должны быть больше нуля".into());
+    }
+    teachme_core::config::save_config(&st.home.config_path(), &config).map_err(err)?;
+    let al = app.autolaunch();
+    let _ = if autostart { al.enable() } else { al.disable() };
+    app.restart();
+}
+
+#[tauri::command]
+async fn list_models(st: State<'_, AppState>, provider: String, key: String) -> CmdResult<Vec<String>> {
+    let base_url = st.cfg.openai.base_url.clone();
+    tauri::async_runtime::spawn_blocking(move || match provider.as_str() {
+        "anthropic" => teachme_core::anthropic::Claude::list_models(&key),
+        _ => OpenAi::list_models(&base_url, &key),
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+/// Opens a web page (only https) or one of the app's files in the system app.
+#[tauri::command]
+fn open_external(st: State<AppState>, target: String) -> CmdResult<()> {
+    let path = match target.as_str() {
+        "sources" => st.home.sources_path().to_string_lossy().into_owned(),
+        "folder" => st.home.root.to_string_lossy().into_owned(),
+        url if url.starts_with("https://") => url.to_string(),
+        _ => return Err("unsupported target".into()),
+    };
+    let mut cmd = if cfg!(windows) {
+        if target == "sources" {
+            std::process::Command::new("notepad")
+        } else {
+            let mut c = std::process::Command::new("rundll32");
+            c.arg("url.dll,FileProtocolHandler");
+            c
+        }
+    } else if target == "sources" {
+        let mut c = std::process::Command::new("open");
+        c.arg("-t");
+        c
+    } else {
+        std::process::Command::new("open")
+    };
+    cmd.arg(path).spawn().map_err(err)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn show_pairing(app: AppHandle) {
+    std::thread::spawn(move || open_pairing(&app));
+}
+
 #[tauri::command]
 fn stats(st: State<AppState>) -> CmdResult<Stats> {
     st.db.lock().unwrap().stats(DIR).map_err(err)
@@ -496,6 +602,7 @@ fn main() {
     };
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -530,7 +637,12 @@ fn main() {
             toggle_record,
             stats,
             ui_log,
-            get_pairing
+            get_pairing,
+            get_settings,
+            save_settings,
+            list_models,
+            open_external,
+            show_pairing
         ])
         .setup(|app| {
             // Menu bar only, no Dock icon.
@@ -548,11 +660,11 @@ fn main() {
             let pause_i = MenuItem::with_id(app, "pause", "Пауза на час", true, None::<&str>)?;
             let resume_i = MenuItem::with_id(app, "resume", "Продолжить", true, None::<&str>)?;
             let pair_i = MenuItem::with_id(app, "pair", "Подключить телефон…", true, None::<&str>)?;
-            let folder_i = MenuItem::with_id(app, "folder", "Открыть папку с настройками", true, None::<&str>)?;
+            let settings_i = MenuItem::with_id(app, "settings", "Настройки…", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&now_i, &pause_i, &resume_i, &sep, &pair_i, &folder_i, &sep2, &quit_i])?;
+            let menu = Menu::with_items(app, &[&now_i, &pause_i, &resume_i, &sep, &settings_i, &pair_i, &sep2, &quit_i])?;
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("teach-me")
@@ -572,9 +684,9 @@ fn main() {
                             let app = app.clone();
                             std::thread::spawn(move || open_pairing(&app));
                         }
-                        "folder" => {
-                            let opener = if cfg!(windows) { "explorer" } else { "open" };
-                            let _ = std::process::Command::new(opener).arg(&st.home.root).spawn();
+                        "settings" => {
+                            let app = app.clone();
+                            std::thread::spawn(move || open_settings(&app));
                         }
                         "quit" => app.exit(0),
                         _ => {}
@@ -599,6 +711,11 @@ fn main() {
                 }
             }
             update_tray_tooltip(&handle);
+            // First run: no keys yet — show the settings right away.
+            if st.cfg.anthropic.api_key.trim().is_empty() && st.cfg.openai.api_key.trim().is_empty() {
+                let h = handle.clone();
+                std::thread::spawn(move || open_settings(&h));
+            }
             if std::env::args().any(|a| a == "--now") {
                 spawn_open_quiz(&handle, true);
             }

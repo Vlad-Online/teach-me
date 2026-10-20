@@ -1,10 +1,10 @@
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const CONFIG_FILE: &str = "config.toml";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub sync: SyncConfig,
@@ -15,7 +15,7 @@ pub struct Config {
     pub harvest: HarvestConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SyncConfig {
     /// Desktop: answer phones on the local network.
@@ -30,7 +30,7 @@ impl Default for SyncConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LlmConfig {
     /// Text tasks (rating, translation, answer checking): "anthropic" | "openai".
@@ -43,7 +43,7 @@ impl Default for LlmConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AnthropicConfig {
     pub api_key: String,
@@ -69,7 +69,7 @@ impl Default for AnthropicConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OpenAiConfig {
     pub api_key: String,
@@ -86,7 +86,7 @@ pub struct OpenAiConfig {
     pub judge_reasoning: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TrainerConfig {
     /// Minutes between regular popups.
@@ -105,7 +105,7 @@ pub struct TrainerConfig {
     pub card_now_hotkey: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HarvestConfig {
     pub min_words: usize,
@@ -267,8 +267,70 @@ impl Home {
     }
 }
 
+/// Writes `cfg` into config.toml, changing only values that differ and keeping
+/// the comments and layout of the file (it stays readable and hand-editable).
+pub fn save_config(path: &Path, cfg: &Config) -> Result<()> {
+    let text = if path.exists() {
+        std::fs::read_to_string(path)?
+    } else {
+        include_str!("../../../config.example.toml").to_string()
+    };
+    let mut doc: toml_edit::DocumentMut = text.parse().context("config.toml: invalid TOML")?;
+    let new: toml_edit::DocumentMut = toml::to_string(cfg)?.parse()?;
+    for (section, item) in new.iter() {
+        let Some(table) = item.as_table() else { continue };
+        if !doc.contains_key(section) {
+            doc[section] = toml_edit::table();
+        }
+        for (key, value) in table.iter() {
+            let Some(value) = value.as_value() else { continue };
+            let slot = &mut doc[section][key];
+            match slot.as_value_mut() {
+                Some(old) if old.to_string().trim() == value.to_string().trim() => {}
+                Some(old) => {
+                    // Keep the trailing comment of the line.
+                    let decor = old.decor().clone();
+                    *old = value.clone();
+                    *old.decor_mut() = decor;
+                }
+                None => *slot = toml_edit::Item::Value(value.clone()),
+            }
+        }
+    }
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, doc.to_string())?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 pub fn load_config(path: &Path) -> Result<Config> {
     let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let cfg: Config = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     Ok(cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_keeps_comments_and_changes_values() {
+        let path = std::env::temp_dir().join(format!("teachme-cfg-{}.toml", std::process::id()));
+        std::fs::write(&path, include_str!("../../../config.example.toml")).unwrap();
+        let mut cfg = load_config(&path).unwrap();
+        cfg.anthropic.api_key = "sk-ant-test".into();
+        cfg.trainer.interval_minutes = 40;
+        cfg.trainer.hotkey = "Alt+Space".into();
+        save_config(&path, &cfg).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("api_key = \"sk-ant-test\""));
+        assert!(text.contains("interval_minutes = 40"));
+        assert!(text.contains("# как часто всплывает карточка"), "comment kept");
+        assert!(text.contains("# Скопируйте в config.toml"), "header kept");
+        let back = load_config(&path).unwrap();
+        assert_eq!(back.trainer.hotkey, "Alt+Space");
+        assert_eq!(back.trainer.new_per_day, cfg.trainer.new_per_day);
+        let _ = std::fs::remove_file(&path);
+    }
 }

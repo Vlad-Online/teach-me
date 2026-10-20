@@ -14,6 +14,7 @@ reqwest.workspace = true
 rs-fsrs = "1.2"
 base64 = "0.22"
 tiny_http = "0.12"
+toml_edit = "0.22"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 reqwest = { workspace = true, features = ["default-tls"] }

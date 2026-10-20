@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Quiz window","local":true,"windows":["quiz","pair"],"permissions":["core:default"]}}
+{"default":{"identifier":"default","description":"Quiz window","local":true,"windows":["quiz","pair","settings"],"permissions":["core:default"]}}

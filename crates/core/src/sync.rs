@@ -108,9 +108,21 @@ pub fn start_server(cfg: ServerConfig) -> Result<()> {
     let device = db.device_id.clone();
     drop(db);
 
-    let udp = UdpSocket::bind(("0.0.0.0", cfg.udp_port)).with_context(|| format!("UDP port {}", cfg.udp_port))?;
-    let http = tiny_http::Server::http(("0.0.0.0", cfg.http_port))
-        .map_err(|e| anyhow!("HTTP port {}: {e}", cfg.http_port))?;
+    // Right after a restart the previous process may still hold the ports.
+    let mut attempt = 0;
+    let (udp, http) = loop {
+        let udp = UdpSocket::bind(("0.0.0.0", cfg.udp_port)).with_context(|| format!("UDP port {}", cfg.udp_port));
+        let http = tiny_http::Server::http(("0.0.0.0", cfg.http_port))
+            .map_err(|e| anyhow!("HTTP port {}: {e}", cfg.http_port));
+        match (udp, http) {
+            (Ok(u), Ok(h)) => break (u, h),
+            (Err(e), _) | (_, Err(e)) if attempt >= 15 => return Err(e),
+            _ => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+        }
+    };
 
     let http_port = cfg.http_port;
     let answer_device = device.clone();

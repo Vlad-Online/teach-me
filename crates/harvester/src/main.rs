@@ -183,6 +183,15 @@ fn check_api(home: &Home, cfg: &Config, db: &Db) -> Result<()> {
     use teachme_core::judge;
     use teachme_core::llm::Llm;
 
+    for (name, r) in [
+        ("Claude", teachme_core::anthropic::Claude::list_models(&cfg.anthropic.api_key)),
+        ("OpenAI", OpenAi::list_models(&cfg.openai.base_url, &cfg.openai.api_key)),
+    ] {
+        match r {
+            Ok(m) => println!("Ключ {name}: работает, моделей {}", m.len()),
+            Err(e) => println!("Ключ {name}: ошибка — {e}"),
+        }
+    }
     println!("Тексты: provider = {}", cfg.llm.provider);
     let llm = Llm::from_config(cfg)?;
     let card = |pt: &str, ru: &str| teachme_core::StudyCard {

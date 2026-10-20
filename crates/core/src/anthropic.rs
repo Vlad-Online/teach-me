@@ -25,6 +25,27 @@ impl Claude {
         Ok(Self { cfg: cfg.clone(), http })
     }
 
+    /// Model ids available to this key. Also a free way to check the key.
+    pub fn list_models(api_key: &str) -> Result<Vec<String>> {
+        let http = Client::builder().timeout(Duration::from_secs(20)).build()?;
+        let resp = http
+            .get("https://api.anthropic.com/v1/models?limit=100")
+            .header("x-api-key", api_key.trim())
+            .header("anthropic-version", API_VERSION)
+            .send()?;
+        let status = resp.status();
+        let v: Value = resp.json().context("Claude: invalid JSON response")?;
+        if !status.is_success() {
+            bail!("{}", v["error"]["message"].as_str().unwrap_or("ключ не подошёл"));
+        }
+        Ok(v["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|m| m["id"].as_str().map(String::from))
+            .collect())
+    }
+
     pub fn chat_json(&self, purpose: Purpose, system: &str, user: &str, schema: Value) -> Result<Value> {
         self.request(purpose, system, json!(user), schema)
     }

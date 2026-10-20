@@ -2,6 +2,7 @@
 name = "harvester"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 teachme-core.workspace = true

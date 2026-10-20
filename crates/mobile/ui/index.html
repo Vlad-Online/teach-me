@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>teach-me</title>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f3f4f6; --text: #1d1f23; --muted: #6b7280; --border: #e3e5e9;
+    --accent: #0b6e4f; --accent-text: #ffffff;
+    --ok: #0b7a3e; --ok-bg: #e6f5ec; --warn: #9a6200; --warn-bg: #fff4dc; --bad: #b42318; --bad-bg: #fde8e7; --rec: #d92d20;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141518; --panel: #22242a; --text: #ececee; --muted: #9a9ca3; --border: #33353b;
+      --accent: #2fa37a; --accent-text: #07120d;
+      --ok: #5ad192; --ok-bg: #173325; --warn: #f2bb4b; --warn-bg: #3a2f17; --bad: #ff8a80; --bad-bg: #3d1d1b; --rec: #ff5a4f;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.45 system-ui, sans-serif; }
+  body { padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom); min-height: 100vh; }
+  [hidden] { display: none !important; }
+  button {
+    font: inherit; border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    border-radius: 12px; padding: 12px 16px; min-height: 48px;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+  button.big { width: 100%; font-size: 18px; min-height: 56px; }
+  button:disabled { opacity: .5; }
+  h1 { font-size: 22px; margin: 16px 0 4px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .stack { display: flex; flex-direction: column; gap: 12px; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+
+  /* home */
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 16px 0; }
+  .tile { background: var(--panel); border-radius: 14px; padding: 14px; }
+  .tile .n { font-size: 28px; font-weight: 700; }
+  .tile .l { font-size: 13px; color: var(--muted); }
+  .sync-line { font-size: 13px; color: var(--muted); text-align: center; min-height: 18px; }
+  .sync-line.err { color: var(--bad); }
+
+  /* card */
+  .topbar { display: flex; align-items: center; gap: 8px; padding: 10px 0; }
+  .badge { font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: var(--panel); }
+  .badge.new { background: var(--ok-bg); color: var(--ok); }
+  .badge.hard { background: var(--bad-bg); color: var(--bad); }
+  .topbar .attempt { flex: 1; font-size: 13px; color: var(--muted); }
+  .topbar button { min-height: 40px; padding: 6px 12px; }
+  .video { position: relative; background: #000; border-radius: 14px; overflow: hidden; aspect-ratio: 16 / 9; }
+  video { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .vbtns { display: flex; gap: 8px; margin-top: 8px; }
+  .vbtns button { flex: 1; min-height: 44px; padding: 8px; font-size: 15px; }
+  .vbtns button.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .source { font-size: 12px; color: var(--muted); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .subs { font-size: 19px; font-weight: 600; text-align: center; padding: 10px; background: var(--panel); border-radius: 12px; }
+  .mic {
+    width: 100%; min-height: 76px; border-radius: 18px; font-size: 17px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    user-select: none; -webkit-user-select: none; touch-action: none;
+  }
+  .mic .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--muted); }
+  .mic.recording { background: var(--rec); border-color: var(--rec); color: #fff; }
+  .mic.recording .dot { background: #fff; animation: pulse 1s infinite; }
+  .mic.busy .dot { background: var(--warn); animation: pulse .6s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  input[type=text], textarea {
+    width: 100%; font: inherit; padding: 12px; border: 1px solid var(--border); border-radius: 12px;
+    background: var(--bg); color: var(--text); outline: none;
+  }
+  input[type=text]:focus, textarea:focus { border-color: var(--accent); }
+  .verdict { font-weight: 700; font-size: 17px; padding: 10px 14px; border-radius: 12px; }
+  .verdict.ok { background: var(--ok-bg); color: var(--ok); }
+  .verdict.partial { background: var(--warn-bg); color: var(--warn); }
+  .verdict.bad { background: var(--bad-bg); color: var(--bad); }
+  .pt { font-size: 18px; font-weight: 600; }
+  .ru { font-size: 18px; }
+  .small { font-size: 14px; color: var(--muted); }
+  .hint { font-size: 14px; color: var(--muted); text-align: center; }
+</style>
+</head>
+<body>
+
+<!-- ============ home ============ -->
+<section id="home">
+  <h1>teach-me</h1>
+  <div class="muted">Европейский португальский по клипам</div>
+  <div class="tiles">
+    <div class="tile"><div class="n" id="t-new">–</div><div class="l">новых сегодня</div></div>
+    <div class="tile"><div class="n" id="t-due">–</div><div class="l">к повтору</div></div>
+    <div class="tile"><div class="n" id="t-hard">–</div><div class="l">трудных</div></div>
+    <div class="tile"><div class="n" id="t-all">–</div><div class="l">фраз в базе</div></div>
+  </div>
+  <div class="stack">
+    <button class="primary big" id="study">Учить</button>
+    <button class="big" id="sync">Синхронизировать с ПК</button>
+    <div class="sync-line" id="sync-line"></div>
+    <button class="ghost" id="to-pair">Подключить к ПК</button>
+  </div>
+</section>
+
+<!-- ============ pairing ============ -->
+<section id="pairing" hidden>
+  <div class="topbar"><span class="attempt">Подключение к ПК</span><button class="ghost" data-home>✕</button></div>
+  <div class="stack">
+    <div class="small">На ПК: значок teach-me в трее → «Подключить телефон…». Телефон и ПК — в одной сети Wi-Fi.</div>
+    <button class="primary big" id="scan">Сканировать QR-код</button>
+    <div class="small">или вставьте содержимое кода:</div>
+    <textarea id="pair-text" rows="4" placeholder='{"host": "...", "port": 47812, "key": "..."}'></textarea>
+    <button id="pair-save">Сохранить</button>
+    <div class="sync-line" id="pair-line"></div>
+  </div>
+</section>
+
+<!-- ============ card ============ -->
+<section id="card" hidden>
+  <div class="topbar">
+    <span class="badge" id="badge"></span>
+    <span class="attempt" id="attempt-label"></span>
+    <button class="ghost" id="close">✕</button>
+  </div>
+  <div class="video" id="video-wrap"><video id="video" playsinline preload="auto"></video></div>
+  <div class="vbtns">
+    <button id="replay">↻ Ещё раз</button>
+    <button id="slow">🐢 Медленнее</button>
+  </div>
+  <div class="source" id="source"></div>
+
+  <div class="stack" style="margin-top: 12px">
+    <div class="subs" id="subs" hidden></div>
+
+    <div id="answer" class="stack">
+      <button class="mic" id="mic"><span class="dot"></span><span id="mic-text">Держите и говорите перевод</span></button>
+      <div class="row" style="flex: none">
+        <input type="text" id="input" placeholder="…или введите перевод" autocomplete="off" enterkeyhint="send">
+      </div>
+      <div class="row">
+        <button class="primary" id="check">Проверить</button>
+        <button class="ghost" id="dunno">Не знаю</button>
+      </div>
+    </div>
+
+    <div id="checking" class="hint" hidden>Проверяю…</div>
+
+    <div id="result" class="stack" hidden>
+      <div class="verdict" id="verdict"></div>
+      <div id="feedback"></div>
+      <div class="pt" id="r-pt"></div>
+      <div class="ru" id="r-ru"></div>
+      <div class="small" id="r-alt"></div>
+      <div class="small" id="r-notes"></div>
+      <div class="small" id="r-your"></div>
+      <div class="row">
+        <button class="primary" id="more">Дальше</button>
+        <button id="done">Хватит</button>
+      </div>
+      <button class="ghost" id="override" hidden>Засчитать как верно</button>
+      <div class="small" id="due"></div>
+    </div>
+
+    <div id="empty" class="hint" hidden>На сейчас всё: новых и просроченных фраз нет.</div>
+  </div>
+</section>
+
+<script>
+const { invoke, convertFileSrc } = window.__TAURI__.core;
+const $ = (id) => document.getElementById(id);
+const screens = ['home', 'pairing', 'card'];
+function show(name) { screens.forEach((s) => ($(s).hidden = s !== name)); }
+
+let status = null;
+
+// ---------------- home ----------------
+
+async function refresh() {
+  try {
+    status = await invoke('status');
+  } catch (e) {
+    $('sync-line').textContent = String(e);
+    return;
+  }
+  const s = status.stats;
+  $('t-new').textContent = `${s.new_today}/10`;
+  $('t-due').textContent = s.due_now;
+  $('t-hard').textContent = s.difficult;
+  $('t-all').textContent = s.phrases;
+  $('study').disabled = s.phrases === 0;
+  $('study').textContent = s.phrases === 0 ? 'Сначала синхронизируйтесь с ПК' : 'Учить';
+  $('to-pair').textContent = status.paired ? `Подключено к ПК ${status.host} · изменить` : 'Подключить к ПК';
+  $('to-pair').className = status.paired ? 'ghost' : 'primary big';
+  $('sync').hidden = !status.paired;
+  if (status.last_sync && !$('sync-line').classList.contains('busy')) {
+    $('sync-line').classList.remove('err');
+    $('sync-line').textContent = 'Синхронизировано ' + new Date(status.last_sync).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+}
+
+async function sync(quiet) {
+  if (!status || !status.paired) return;
+  const line = $('sync-line');
+  line.classList.add('busy');
+  line.classList.remove('err');
+  if (!quiet) line.textContent = 'Ищу ПК в сети…';
+  $('sync').disabled = true;
+  try {
+    const r = await invoke('sync_now');
+    const parts = [];
+    if (r.new_phrases) parts.push(`новых фраз: ${r.new_phrases}`);
+    if (r.new_clips) parts.push(`клипов: ${r.new_clips}`);
+    if (r.received_events + r.sent_events) parts.push(`ответов: ${r.received_events + r.sent_events}`);
+    line.textContent = parts.length ? 'Готово — ' + parts.join(', ') : 'Всё уже синхронизировано';
+  } catch (e) {
+    line.classList.add('err');
+    line.textContent = String(e);
+  } finally {
+    line.classList.remove('busy');
+    $('sync').disabled = false;
+    refresh();
+  }
+}
+
+$('sync').onclick = () => sync(false);
+$('study').onclick = () => startStudy();
+$('to-pair').onclick = () => show('pairing');
+document.querySelectorAll('[data-home]').forEach((b) => (b.onclick = () => { show('home'); refresh(); }));
+
+// ---------------- pairing ----------------
+
+async function savePairing(text) {
+  try {
+    await invoke('pair', { payload: text });
+    $('pair-line').classList.remove('err');
+    $('pair-line').textContent = 'Подключено. Синхронизирую…';
+    show('home');
+    await refresh();
+    sync(false);
+  } catch (e) {
+    $('pair-line').classList.add('err');
+    $('pair-line').textContent = String(e);
+  }
+}
+
+$('scan').onclick = async () => {
+  try {
+    let perm = await invoke('plugin:barcode-scanner|check_permissions');
+    if (perm.camera !== 'granted') perm = await invoke('plugin:barcode-scanner|request_permissions');
+    if (perm.camera !== 'granted') throw new Error('Нет доступа к камере');
+    const r = await invoke('plugin:barcode-scanner|scan', { windowed: false, formats: ['QR_CODE'] });
+    await savePairing(r.content);
+  } catch (e) {
+    $('pair-line').classList.add('err');
+    $('pair-line').textContent = String(e && e.message ? e.message : e);
+  }
+};
+$('pair-save').onclick = () => savePairing($('pair-text').value);
+
+// ---------------- card ----------------
+
+let card = null, attempt = 1, pending = null, answers = [], busy = false, phase = 'answer', slow = false;
+
+function setSlow(on) {
+  slow = on;
+  $('video').playbackRate = on ? 0.7 : 1;
+  $('slow').classList.toggle('on', on);
+}
+function play() {
+  const v = $('video');
+  v.playbackRate = slow ? 0.7 : 1;
+  v.currentTime = 0;
+  v.play().catch(() => {});
+}
+function setAttemptLabel() {
+  $('attempt-label').textContent = attempt === 1 ? 'Попытка 1 из 2 · без субтитров' : 'Попытка 2 из 2 · с субтитрами';
+}
+function micIdle() {
+  $('mic').className = 'mic';
+  $('mic').hidden = !status.has_stt;
+  $('mic-text').textContent = 'Держите и говорите перевод';
+  $('input').placeholder = status.has_stt ? '…или введите перевод' : 'Перевод (можно голосом: микрофон на клавиатуре)';
+}
+
+async function startStudy() {
+  show('card');
+  await nextCard();
+}
+
+async function nextCard() {
+  const c = await invoke('next_card');
+  if (!c) {
+    card = null;
+    phase = 'empty';
+    $('empty').hidden = false;
+    ['answer', 'result', 'subs', 'checking'].forEach((id) => ($(id).hidden = true));
+    $('video').removeAttribute('src');
+    return;
+  }
+  card = c; attempt = 1; pending = null; answers = []; phase = 'answer';
+  const b = $('badge');
+  b.className = 'badge' + (c.is_new ? ' new' : c.difficult ? ' hard' : '');
+  b.textContent = c.is_new ? 'Новая' : c.difficult ? 'Трудная' : 'Повтор';
+  $('source').textContent = c.source_title || '';
+  $('subs').textContent = c.text_pt;
+  ['subs', 'result', 'empty', 'checking'].forEach((id) => ($(id).hidden = true));
+  $('answer').hidden = false;
+  $('input').value = '';
+  setAttemptLabel();
+  setSlow(false);
+  micIdle();
+  $('video').src = convertFileSrc(c.clip_path);
+  play();
+}
+
+async function submit(text) {
+  if (busy || phase !== 'answer') return;
+  busy = true;
+  const answer = (text ?? $('input').value).trim();
+  $('input').blur();
+  answers.push(answer || '—');
+  $('answer').hidden = true;
+  $('checking').hidden = false;
+  let v;
+  try { v = await invoke('check_answer', { answer, attempt }); }
+  catch (e) { v = { verdict: 'wrong', feedback: String(e) }; }
+  $('checking').hidden = true;
+  busy = false;
+  if (v.verdict === 'correct') return showResult(v, attempt === 1 ? 'first' : 'second');
+  if (v.verdict === 'partial') return showResult(v, 'second');
+  if (attempt === 1) {
+    attempt = 2;
+    setAttemptLabel();
+    $('subs').hidden = false;
+    $('answer').hidden = false;
+    $('input').value = '';
+    micIdle();
+    $('mic-text').textContent = answer ? `«${answer}» — не совсем. С субтитрами:` : 'Посмотрите с субтитрами';
+    play();
+    return;
+  }
+  showResult(v, 'failed');
+}
+
+function showResult(v, outcome) {
+  phase = 'result';
+  pending = outcome;
+  $('subs').hidden = false;
+  $('answer').hidden = true;
+  const el = $('verdict');
+  if (outcome === 'failed') { el.className = 'verdict bad'; el.textContent = 'Не получилось — запомним'; }
+  else if (v.verdict === 'partial') { el.className = 'verdict partial'; el.textContent = 'Почти верно'; }
+  else { el.className = 'verdict ok'; el.textContent = attempt === 1 ? 'Верно!' : 'Верно со второй попытки'; }
+  $('feedback').textContent = v.feedback || '';
+  $('r-pt').textContent = card.text_pt;
+  $('r-ru').textContent = card.text_ru;
+  $('r-alt').textContent = card.alt_ru && card.alt_ru.length ? 'Также: ' + card.alt_ru.join(' · ') : '';
+  $('r-notes').textContent = card.notes || '';
+  $('r-your').textContent = 'Ваш ответ: ' + answers.join(' → ');
+  $('override').hidden = outcome !== 'failed' && v.verdict !== 'partial';
+  $('due').textContent = '';
+  $('result').hidden = false;
+  $('attempt-label').textContent = '';
+}
+
+async function commit() {
+  if (!pending) return;
+  const outcome = pending;
+  pending = null;
+  try { $('due').textContent = 'Следующий повтор ' + await invoke('finish', { outcome, answer: answers.join(' → ') }); }
+  catch (e) { console.error(e); }
+}
+
+$('replay').onclick = play;
+$('video-wrap').onclick = play;
+$('slow').onclick = () => { setSlow(!slow); play(); };
+$('check').onclick = () => submit();
+$('dunno').onclick = () => submit('');
+$('input').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+$('more').onclick = async () => { await commit(); nextCard(); };
+$('done').onclick = async () => { await commit(); show('home'); refresh(); };
+$('close').onclick = async () => { await commit(); $('video').pause(); show('home'); refresh(); };
+$('override').onclick = () => {
+  pending = attempt === 1 ? 'first' : 'second';
+  $('verdict').className = 'verdict ok';
+  $('verdict').textContent = 'Засчитано';
+  $('override').hidden = true;
+};
+
+// ---------------- voice: hold to talk ----------------
+
+let recorder = null, chunks = [], stream = null;
+
+async function recStart() {
+  if (phase !== 'answer' || recorder) return;
+  try {
+    stream = stream || await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    $('mic-text').textContent = 'Нет доступа к микрофону';
+    return;
+  }
+  $('video').pause();
+  chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  recorder.onstop = onRecorded;
+  recorder.start();
+  $('mic').className = 'mic recording';
+  $('mic-text').textContent = 'Говорите… отпустите, чтобы отправить';
+}
+
+function recStop() {
+  if (!recorder) return;
+  const r = recorder;
+  recorder = null;
+  r.stop();
+}
+
+async function onRecorded() {
+  const blob = new Blob(chunks, { type: chunks[0] ? chunks[0].type : 'audio/webm' });
+  if (blob.size < 2000) { micIdle(); return; }
+  $('mic').className = 'mic busy';
+  $('mic-text').textContent = 'Распознаю…';
+  const b64 = await new Promise((res) => {
+    const fr = new FileReader();
+    fr.onload = () => res(String(fr.result).split(',')[1]);
+    fr.readAsDataURL(blob);
+  });
+  try {
+    const text = await invoke('transcribe', { audioB64: b64, mime: blob.type });
+    micIdle();
+    $('input').value = text;
+    if (text) submit(text);
+  } catch (e) {
+    micIdle();
+    $('mic-text').textContent = String(e);
+  }
+}
+
+const mic = $('mic');
+mic.addEventListener('pointerdown', (e) => { e.preventDefault(); recStart(); });
+mic.addEventListener('pointerup', recStop);
+mic.addEventListener('pointercancel', recStop);
+mic.addEventListener('pointerleave', recStop);
+mic.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ---------------- start ----------------
+
+(async () => {
+  await refresh();
+  if (!status.paired) show('pairing'); else { show('home'); sync(true); }
+})();
+document.addEventListener('visibilitychange', () => { if (!document.hidden && status && status.paired && $('home').hidden === false) sync(true); });
+</script>
+</body>
+</html>

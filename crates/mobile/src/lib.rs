@@ -2,8 +2,8 @@
 //! over the local network (see `teachme_core::sync`).
 
 use anyhow::Context;
-use chrono::{DateTime, Utc};
-use serde::Serialize;
+use chrono::{DateTime, Duration as ChronoDuration, Local, Timelike, Utc};
+use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -94,6 +94,194 @@ fn pair(st: State<AppState>, payload: String) -> CmdResult<()> {
     Ok(())
 }
 
+// ---------- reminders ----------
+
+#[derive(Serialize, Deserialize, Clone)]
+struct Reminders {
+    enabled: bool,
+    interval_minutes: u32,
+    from_hour: u32,
+    to_hour: u32,
+}
+
+impl Default for Reminders {
+    fn default() -> Self {
+        Self { enabled: true, interval_minutes: 30, from_hour: 9, to_hour: 22 }
+    }
+}
+
+/// Notification ids owned by the reminder schedule.
+const REMINDER_IDS: std::ops::Range<i32> = 1000..1064;
+/// How far ahead reminders are planned (re-planned on every app start and card).
+const PLAN_HOURS: i64 = 48;
+
+#[derive(Serialize)]
+struct RemindersDto {
+    #[serde(flatten)]
+    settings: Reminders,
+    /// Local time of the next reminder, e.g. "сегодня 14:30".
+    next: Option<String>,
+    scheduled: usize,
+}
+
+impl AppState {
+    fn reminders(&self) -> Reminders {
+        self.db
+            .lock()
+            .unwrap()
+            .meta("reminders")
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+}
+
+/// One reminder: when, and what is waiting at that moment.
+#[cfg_attr(not(mobile), allow(dead_code))]
+struct Slot {
+    at: DateTime<Local>,
+    due: i64,
+    new: i64,
+}
+
+/// Times within active hours, every `interval`, where something is to study.
+fn plan_slots(st: &AppState, r: &Reminders) -> anyhow::Result<Vec<Slot>> {
+    let db = st.db.lock().unwrap();
+    let unseen = db.stats(DIR)?.unseen;
+    let new_today = db.new_today(DIR)?;
+    let now = Local::now();
+    let step = ChronoDuration::minutes(r.interval_minutes.max(5) as i64);
+    let mut slots = vec![];
+    let mut t = now + step;
+    while t < now + ChronoDuration::hours(PLAN_HOURS) && slots.len() < REMINDER_IDS.len() {
+        if t.hour() >= r.from_hour && t.hour() < r.to_hour {
+            let due: i64 = db.conn.query_row(
+                "SELECT COUNT(*) FROM reviews WHERE direction = ?1 AND due <= ?2",
+                rusqlite_params(DIR, t.with_timezone(&Utc)),
+                |row| row.get(0),
+            )?;
+            // The daily limit of new phrases restarts tomorrow.
+            let left_today = if t.date_naive() == now.date_naive() { NEW_PER_DAY as i64 - new_today } else { NEW_PER_DAY as i64 };
+            let new = unseen.min(left_today.max(0));
+            if due + new > 0 {
+                slots.push(Slot { at: t, due, new });
+            }
+        }
+        t += step;
+    }
+    Ok(slots)
+}
+
+fn rusqlite_params(dir: Direction, t: DateTime<Utc>) -> (i64, DateTime<Utc>) {
+    (dir as i64, t)
+}
+
+fn human_when(t: DateTime<Local>) -> String {
+    let today = Local::now().date_naive();
+    let day = if t.date_naive() == today {
+        "сегодня"
+    } else if t.date_naive() == today.succ_opt().unwrap_or(today) {
+        "завтра"
+    } else {
+        "послезавтра"
+    };
+    format!("{day} {}", t.format("%H:%M"))
+}
+
+/// Replaces the scheduled reminders with a fresh plan. Android keeps the
+/// alarms, so they fire even when the app is closed.
+fn reschedule(app: &AppHandle) -> anyhow::Result<RemindersDto> {
+    let st = app.state::<AppState>();
+    let settings = st.reminders();
+    let slots = if settings.enabled { plan_slots(&st, &settings)? } else { vec![] };
+    #[cfg(mobile)]
+    {
+        use tauri_plugin_notification::{NotificationExt, Schedule};
+        let n = app.notification();
+        let _ = n.cancel(REMINDER_IDS.collect());
+        for (id, s) in REMINDER_IDS.zip(&slots) {
+            let body = match (s.due, s.new) {
+                (0, n) => format!("Новых фраз: {n} — пара минут на слух"),
+                (d, 0) => format!("К повтору: {d} — пара минут на слух"),
+                (d, n) => format!("К повтору: {d} · новых: {n}"),
+            };
+            let date = time::OffsetDateTime::from_unix_timestamp(s.at.timestamp())?;
+            n.builder()
+                .id(id)
+                .title("teach-me")
+                .body(body)
+                .auto_cancel()
+                .extra("study", true)
+                .schedule(Schedule::At { date, repeating: false, allow_while_idle: true })
+                .show()?;
+        }
+    }
+    Ok(RemindersDto {
+        next: slots.first().map(|s| human_when(s.at)),
+        scheduled: slots.len(),
+        settings,
+    })
+}
+
+fn reschedule_in_background(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = reschedule(&app) {
+            eprintln!("reminders: {e}");
+        }
+    });
+}
+
+/// A reminder in 10 seconds: checks that notifications reach the user
+/// (battery savers on some phones block them for closed apps).
+#[tauri::command]
+fn test_reminder(app: AppHandle) -> CmdResult<()> {
+    #[cfg(mobile)]
+    {
+        use tauri_plugin_notification::{NotificationExt, Schedule};
+        let date = time::OffsetDateTime::now_utc() + time::Duration::seconds(10);
+        app.notification()
+            .builder()
+            .id(1099)
+            .title("teach-me")
+            .body("Проверка: напоминания работают. Нажмите, чтобы открыть карточку.")
+            .auto_cancel()
+            .extra("study", true)
+            .schedule(Schedule::At { date, repeating: false, allow_while_idle: true })
+            .show()
+            .map_err(err)?;
+    }
+    #[cfg(not(mobile))]
+    let _ = app;
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_reminders(app: AppHandle) -> CmdResult<RemindersDto> {
+    tauri::async_runtime::spawn_blocking(move || reschedule(&app).map_err(err))
+        .await
+        .map_err(err)?
+}
+
+#[tauri::command]
+async fn set_reminders(app: AppHandle, settings: Reminders) -> CmdResult<RemindersDto> {
+    if settings.from_hour >= settings.to_hour || settings.to_hour > 24 {
+        return Err("Время «с» должно быть раньше «до»".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let st = app.state::<AppState>();
+        st.db
+            .lock()
+            .unwrap()
+            .set_meta("reminders", &serde_json::to_string(&settings).map_err(err)?)
+            .map_err(err)?;
+        reschedule(&app).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
 fn do_sync(app: &AppHandle) -> anyhow::Result<SyncReport> {
     let st = app.state::<AppState>();
     let _one = st.syncing.lock().unwrap();
@@ -105,8 +293,13 @@ fn do_sync(app: &AppHandle) -> anyhow::Result<SyncReport> {
     let addr = sync::discover(&device, sync::UDP_PORT, &known, Duration::from_secs(4))?
         .or_else(|| known.first().map(|ip| SocketAddr::new(*ip, pairing.port)))
         .context("ПК не найден в сети")?;
-    let db = st.db.lock().unwrap();
-    sync::sync_with(addr, &pairing.key, &db, &st.clips_dir())
+    let report = {
+        let db = st.db.lock().unwrap();
+        sync::sync_with(addr, &pairing.key, &db, &st.clips_dir())?
+    };
+    // New phrases and answers from the desktop change what is due.
+    reschedule_in_background(app);
+    Ok(report)
 }
 
 #[tauri::command]
@@ -163,6 +356,7 @@ fn finish(app: AppHandle, st: State<AppState>, outcome: Outcome, answer: String)
         .record_outcome(phrase_id, DIR, outcome, &answer, Utc::now())
         .map_err(err)?;
     // Push the answer to the desktop right away if it is around.
+    reschedule_in_background(&app);
     let app = app.clone();
     std::thread::spawn(move || {
         let _ = do_sync(&app);
@@ -201,7 +395,9 @@ fn human_due(due: DateTime<Utc>) -> String {
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(mobile)]
-    let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
+    let builder = builder
+        .plugin(tauri_plugin_barcode_scanner::init())
+        .plugin(tauri_plugin_notification::init());
     builder
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -213,9 +409,21 @@ pub fn run() {
                 syncing: Mutex::new(()),
                 card: Mutex::new(None),
             });
+            reschedule_in_background(app.handle());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![status, pair, sync_now, next_card, check_answer, finish, transcribe])
+        .invoke_handler(tauri::generate_handler![
+            status,
+            pair,
+            sync_now,
+            next_card,
+            check_answer,
+            finish,
+            transcribe,
+            get_reminders,
+            set_reminders,
+            test_reminder
+        ])
         .run(tauri::generate_context!())
         .expect("error while running teach-me");
 }

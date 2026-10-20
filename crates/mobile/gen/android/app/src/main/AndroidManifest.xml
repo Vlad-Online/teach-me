@@ -4,6 +4,8 @@
     <!-- voice answers (MediaRecorder in the WebView) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- reminders fire on time, not within a one-hour window -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

@@ -80,6 +80,16 @@
   .ru { font-size: 18px; }
   .small { font-size: 14px; color: var(--muted); }
   .hint { font-size: 14px; color: var(--muted); text-align: center; }
+  .card-box { background: var(--panel); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+  .card-box .head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; }
+  .card-box select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+  .card-box .line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; }
+  .toggle { position: relative; width: 50px; height: 30px; flex: none; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle span { position: absolute; inset: 0; border-radius: 999px; background: var(--border); transition: .2s; }
+  .toggle span::after { content: ''; position: absolute; width: 24px; height: 24px; left: 3px; top: 3px; border-radius: 50%; background: #fff; transition: .2s; }
+  .toggle input:checked + span { background: var(--accent); }
+  .toggle input:checked + span::after { transform: translateX(20px); }
 </style>
 </head>
 <body>
@@ -99,6 +109,24 @@
     <button class="big" id="sync">Синхронизировать с ПК</button>
     <div class="sync-line" id="sync-line"></div>
     <button class="ghost" id="to-pair">Подключить к ПК</button>
+  </div>
+
+  <div class="card-box" id="rem">
+    <div class="head">Напоминания
+      <label class="toggle"><input type="checkbox" id="rem-on"><span></span></label>
+    </div>
+    <div id="rem-opts" class="stack" style="gap: 10px">
+      <div class="line">каждые
+        <select id="rem-interval">
+          <option value="15">15 мин</option><option value="20">20 мин</option><option value="30">30 мин</option>
+          <option value="45">45 мин</option><option value="60">1 час</option><option value="90">1,5 часа</option>
+          <option value="120">2 часа</option><option value="180">3 часа</option>
+        </select>
+      </div>
+      <div class="line">с <select id="rem-from"></select> до <select id="rem-to"></select></div>
+    </div>
+    <div class="small" id="rem-line"></div>
+    <button class="ghost" id="rem-test" style="min-height: 36px; padding: 4px 0; text-align: left">Проверить: напомнить через 10 секунд</button>
   </div>
 </section>
 
@@ -378,7 +406,7 @@ $('check').onclick = () => submit();
 $('dunno').onclick = () => submit('');
 $('input').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
 $('more').onclick = async () => { await commit(); nextCard(); };
-$('done').onclick = async () => { await commit(); show('home'); refresh(); };
+$('done').onclick = async () => { await commit(); show('home'); refresh(); loadReminders(); };
 $('close').onclick = async () => { await commit(); $('video').pause(); show('home'); refresh(); };
 $('override').onclick = () => {
   pending = attempt === 1 ? 'first' : 'second';
@@ -444,11 +472,90 @@ mic.addEventListener('pointercancel', recStop);
 mic.addEventListener('pointerleave', recStop);
 mic.addEventListener('contextmenu', (e) => e.preventDefault());
 
+// ---------------- reminders ----------------
+
+for (let h = 0; h <= 24; h++) {
+  if (h < 24) $('rem-from').add(new Option(`${h}:00`, h));
+  if (h > 0) $('rem-to').add(new Option(`${h}:00`, h));
+}
+
+function showReminders(r) {
+  $('rem-on').checked = r.enabled;
+  $('rem-interval').value = String(r.interval_minutes);
+  $('rem-from').value = String(r.from_hour);
+  $('rem-to').value = String(r.to_hour);
+  $('rem-opts').hidden = !r.enabled;
+  const line = $('rem-line');
+  line.style.color = '';
+  if (!r.enabled) line.textContent = 'Выключены';
+  else if (r.next) line.textContent = `Следующее — ${r.next}`;
+  else line.textContent = 'Пока нечего повторять: напомню, когда появятся фразы';
+}
+
+async function notificationsAllowed() {
+  try {
+    if (await invoke('plugin:notification|is_permission_granted')) return true;
+    return (await invoke('plugin:notification|request_permission')) === 'granted';
+  } catch (e) {
+    return false;
+  }
+}
+
+async function saveReminders() {
+  const settings = {
+    enabled: $('rem-on').checked,
+    interval_minutes: Number($('rem-interval').value),
+    from_hour: Number($('rem-from').value),
+    to_hour: Number($('rem-to').value),
+  };
+  if (settings.enabled && !(await notificationsAllowed())) {
+    $('rem-on').checked = false;
+    settings.enabled = false;
+    $('rem-line').style.color = 'var(--bad)';
+    $('rem-line').textContent = 'Нет разрешения на уведомления: включите его в настройках Android';
+    return;
+  }
+  try {
+    showReminders(await invoke('set_reminders', { settings }));
+  } catch (e) {
+    $('rem-line').style.color = 'var(--bad)';
+    $('rem-line').textContent = String(e);
+  }
+}
+
+['rem-on', 'rem-interval', 'rem-from', 'rem-to'].forEach((id) => ($(id).onchange = saveReminders));
+$('rem-test').onclick = async () => {
+  if (!(await notificationsAllowed())) {
+    $('rem-line').style.color = 'var(--bad)';
+    $('rem-line').textContent = 'Нет разрешения на уведомления: включите его в настройках Android';
+    return;
+  }
+  await invoke('test_reminder');
+  $('rem-test').textContent = 'Через 10 секунд придёт уведомление — можно закрыть приложение';
+  setTimeout(() => ($('rem-test').textContent = 'Проверить: напомнить через 10 секунд'), 15000);
+};
+
+async function loadReminders() {
+  try {
+    const r = await invoke('get_reminders');
+    showReminders(r);
+    if (r.enabled) notificationsAllowed();
+  } catch (e) { $('rem-line').textContent = String(e); }
+}
+
+// Tap on a reminder: straight to a card.
+try {
+  window.__TAURI__.core.addPluginListener('notification', 'actionPerformed', () => {
+    if ($('card').hidden && status && status.stats.phrases > 0) startStudy();
+  });
+} catch (e) { /* not on a phone */ }
+
 // ---------------- start ----------------
 
 (async () => {
   await refresh();
   if (!status.paired) show('pairing'); else { show('home'); sync(true); }
+  loadReminders();
 })();
 document.addEventListener('visibilitychange', () => { if (!document.hidden && status && status.paired && $('home').hidden === false) sync(true); });
 </script>

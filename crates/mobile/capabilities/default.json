@@ -3,5 +3,5 @@
   "identifier": "default",
   "windows": ["main"],
   "platforms": ["android", "iOS"],
-  "permissions": ["core:default", "barcode-scanner:default"]
+  "permissions": ["core:default", "barcode-scanner:default", "notification:default"]
 }

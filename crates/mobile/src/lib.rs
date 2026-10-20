@@ -138,7 +138,7 @@ impl Default for Reminders {
 }
 
 /// Notification ids owned by the reminder schedule.
-const REMINDER_IDS: std::ops::Range<i32> = 1000..1064;
+const REMINDER_IDS: std::ops::Range<i32> = 1000..1200;
 /// How far ahead reminders are planned (re-planned on every app start and card).
 const PLAN_HOURS: i64 = 48;
 
@@ -279,7 +279,7 @@ fn test_reminder(app: AppHandle) -> CmdResult<()> {
         let date = time::OffsetDateTime::now_utc() + time::Duration::seconds(10);
         app.notification()
             .builder()
-            .id(1099)
+            .id(1999)
             .title("teach-me")
             .body("Проверка: напоминания работают. Нажмите, чтобы открыть карточку.")
             .auto_cancel()
@@ -445,6 +445,14 @@ pub fn run() {
                 card: Mutex::new(None),
             });
             reschedule_in_background(app.handle());
+            // Sync at start from Rust: the page may be paused (locked screen),
+            // and fresh settings/answers from the desktop change the reminder plan.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if let Err(e) = do_sync(&handle) {
+                    eprintln!("startup sync: {e}");
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

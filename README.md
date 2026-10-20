@@ -72,7 +72,7 @@ cargo run --release -p teach-me -- --now   # сразу открыть карт�
 
 ```
 cd crates/mobile
-cargo tauri android build --apk --target aarch64            # релизный APK (~10 МБ)
+cargo tauri android build --apk --target aarch64            # релизный APK (~14 МБ)
 cargo tauri android build --debug --apk --target aarch64    # отладочный (~180 МБ)
 ```
 

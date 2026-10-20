@@ -58,8 +58,11 @@ android {
         }
         getByName("release") {
             signingConfig = signingConfigs.getByName("release")
+            // R8 broke the barcode scanner (classes looked up at runtime by the
+            // camera / ML Kit / Tauri plugin bridge). Size comes from the Rust
+            // library anyway, and release strips its debug info without R8.
             optimization {
-               enable = true
+               enable = false
             }
             proguardFiles(
                 *fileTree(".") {

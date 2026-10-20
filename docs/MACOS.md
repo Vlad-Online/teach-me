@@ -26,9 +26,10 @@ cargo install tauri-cli --version "^2" --locked
 
 ## 2. Сборка
 
-Распакуйте архив с проектом (например, в `~/src/teach-me`), затем:
+Скачайте проект (или распакуйте архив в `~/src/teach-me`):
 
 ```bash
+git clone https://github.com/Vlad-Online/teach-me.git ~/src/teach-me
 cd ~/src/teach-me
 cargo build --release -p harvester                      # сборщик базы фраз
 cd crates/app && cargo tauri build --bundles app,dmg    # приложение
@@ -84,3 +85,13 @@ cd ~/teach-me
 Mac-версия собрана по документации, но на настоящем Mac ещё не проверялась.
 Если сборка падает, проще всего запустить на этом Mac Claude Code в папке проекта
 и попросить: «собери teach-me под macOS по docs/MACOS.md и исправь ошибки».
+
+## Обновление
+
+```bash
+cd ~/src/teach-me && git pull
+cargo build --release -p harvester
+cd crates/app && cargo tauri build --bundles app,dmg
+```
+и заменить `teach-me.app` в «Программах» на новый из `target/release/bundle/macos/`.
+

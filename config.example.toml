@@ -1,0 +1,43 @@
+# Скопируйте в config.toml и впишите ключ OpenAI.
+# config.toml не попадает в git.
+
+[llm]
+provider = "anthropic"          # кто переводит фразы и проверяет ответы: anthropic | openai
+
+[anthropic]
+api_key = ""                    # sk-ant-... (ключ из console.anthropic.com)
+enrich_model = "claude-haiku-5-5"   # перевод и разбор фраз при сборе базы
+enrich_effort = "medium"            # low | medium | high
+judge_model = "claude-haiku-5-5"    # проверка ответов
+judge_effort = "low"
+judge_thinking = false              # без рассуждения — ответ быстрее
+
+# OpenAI нужен только для распознавания речи (у Claude нет API распознавания).
+[openai]
+api_key = ""                              # sk-...
+transcribe_model = "gpt-4o-mini-transcribe"  # распознавание речи (ответы и клипы)
+enrich_model = "gpt-6-luna"               # перевод и разбор фраз при сборе базы
+enrich_reasoning = "low"                  # reasoning_effort: none | low | medium; "" для моделей без рассуждения
+judge_model = "gpt-6-luna"                # проверка ответов
+judge_reasoning = "none"                  # без рассуждения: ответ за ~1 c
+
+[trainer]
+interval_minutes = 25      # как часто всплывает карточка
+relearn_minutes = 15       # через сколько вернуть фразу, которую не перевёл
+active_from_hour = 9       # всплывать только с 9:00...
+active_to_hour = 23        # ...до 23:00
+new_per_day = 10           # новых фраз в день
+idle_minutes = 3           # не всплывать, если вас нет за компьютером дольше
+hotkey = "Ctrl+Space"      # держать — идёт запись голоса
+card_now_hotkey = "Ctrl+Alt+P"  # показать карточку прямо сейчас
+
+[harvest]
+level = "A2-B1"
+min_words = 3
+max_words = 8
+min_seconds = 1.0
+max_seconds = 5.5
+videos_per_source = 6
+min_video_minutes = 1.0
+max_video_minutes = 60.0
+keep_videos = false        # хранить ли скачанные видео целиком после нарезки

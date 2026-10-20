@@ -1,0 +1,69 @@
+# Источники видео для сборщика (harvester).
+# Только португальские (pt-PT) каналы: автосубтитры YouTube не отличают pt-PT от pt-BR,
+# поэтому вариант языка гарантируется выбором каналов.
+#
+# kind: news | show | vlog. Он влияет только на статистику и на разнообразие выборки.
+# max_videos: сколько последних видео брать с канала (по умолчанию harvest.videos_per_source).
+
+# ---------- Новости ----------
+[[source]]
+name = "Euronews em Português"
+kind = "news"
+url = "https://www.youtube.com/channel/UCUmEPYxmnyQDeRUcFkslmQw/videos"
+
+[[source]]
+name = "SIC Notícias"
+kind = "news"
+url = "https://www.youtube.com/channel/UCimBp0frQrASSsIFERs8vsw/videos"
+
+[[source]]
+name = "RTP Notícias"
+kind = "news"
+url = "https://www.youtube.com/@RTPNoticias/videos"
+
+[[source]]
+name = "Observador"
+kind = "news"
+url = "https://www.youtube.com/channel/UC35F6ktZodINwjQZjuwLcjg/videos"
+
+# ---------- Сериалы, шоу, юмор ----------
+[[source]]
+name = "Gato Fedorento"
+kind = "show"
+url = "https://www.youtube.com/channel/UCL8juHy9kYJ6G3FRScj7_aA/videos"
+
+[[source]]
+name = "Momentos da TVPT"
+kind = "show"
+url = "https://www.youtube.com/channel/UCzaqQdP2TussC-K8U6frWxQ/videos"
+
+[[source]]
+name = "Maluco Beleza (Rui Unas)"
+kind = "show"
+url = "https://www.youtube.com/channel/UCQB5g-ky8eFqFnV8PtKCJcA/videos"
+
+# ---------- Влоги, подкасты, интервью ----------
+[[source]]
+name = "Practice Portuguese"
+kind = "vlog"
+url = "https://www.youtube.com/@PracticePortuguese/videos"
+
+[[source]]
+name = "CdK podcast"
+kind = "vlog"
+url = "https://www.youtube.com/channel/UC-ktsyA46bixox2tZR66Szw/videos"
+
+[[source]]
+name = "Observador Podcasts"
+kind = "vlog"
+url = "https://www.youtube.com/channel/UCAT3bszpp1UrSQH2VpPFlPA/videos"
+
+[[source]]
+name = "Diogo Batáguas"
+kind = "vlog"
+url = "https://www.youtube.com/channel/UCQ2IleutNd89c9F-LjrwwwQ/videos"
+
+[[source]]
+name = "Clips do Wuant"
+kind = "vlog"
+url = "https://www.youtube.com/channel/UC6eo8jj1kws9Dhde_rTmKoA/videos"

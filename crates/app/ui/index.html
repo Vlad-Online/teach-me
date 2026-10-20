@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>teach-me</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #f4f5f7;
+    --text: #1d1f23;
+    --muted: #6b7280;
+    --border: #e3e5e9;
+    --accent: #0b6e4f;
+    --accent-text: #ffffff;
+    --ok: #0b7a3e;
+    --ok-bg: #e6f5ec;
+    --warn: #9a6200;
+    --warn-bg: #fff4dc;
+    --bad: #b42318;
+    --bad-bg: #fde8e7;
+    --rec: #d92d20;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1d21;
+      --panel: #26282d;
+      --text: #ececee;
+      --muted: #9a9ca3;
+      --border: #34363c;
+      --accent: #2fa37a;
+      --accent-text: #08130e;
+      --ok: #5ad192;
+      --ok-bg: #173325;
+      --warn: #f2bb4b;
+      --warn-bg: #3a2f17;
+      --bad: #ff8a80;
+      --bad-bg: #3d1d1b;
+      --rec: #ff5a4f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    user-select: none;
+  }
+  button {
+    font: inherit;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  button:hover { filter: brightness(0.96); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+  [hidden] { display: none !important; }
+
+  /* ---------- toast ---------- */
+  #toast {
+    height: 100%;
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    grid-template-rows: auto auto;
+    align-content: center;
+    gap: 10px 12px;
+    padding: 14px 14px 12px;
+    -webkit-app-region: drag;
+  }
+  #toast .logo { grid-row: span 2; width: 44px; height: 44px; }
+  #toast .title { font-weight: 600; font-size: 15px; }
+  #toast .sub { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #toast > div { min-width: 0; }
+  #toast .actions { grid-column: 2; display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag; }
+
+  /* ---------- quiz ---------- */
+  #quiz { height: 100%; display: flex; flex-direction: column; }
+  header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px 8px 14px;
+    border-bottom: 1px solid var(--border);
+    -webkit-app-region: drag;
+  }
+  header .badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--panel); }
+  header .badge.new { background: var(--ok-bg); color: var(--ok); }
+  header .badge.hard { background: var(--bad-bg); color: var(--bad); }
+  header .attempt { color: var(--muted); font-size: 12px; flex: 1; }
+  header button { -webkit-app-region: no-drag; padding: 2px 9px; }
+  main { flex: 1; overflow-y: auto; padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .video-wrap { position: relative; background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 16 / 9; cursor: pointer; }
+  video { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .video-wrap .replay {
+    position: absolute; right: 8px; bottom: 8px;
+    background: rgba(0,0,0,.55); color: #fff; border: 0; font-size: 12px; padding: 4px 10px;
+  }
+  .video-wrap .replay.slow { right: auto; left: 8px; }
+  .video-wrap .replay.slow.on { background: var(--accent); color: var(--accent-text); }
+  .source { color: var(--muted); font-size: 12px; margin-top: -4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .subs { font-size: 17px; font-weight: 600; text-align: center; padding: 8px 10px; background: var(--panel); border-radius: 8px; user-select: text; }
+
+  .mic {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border: 1px dashed var(--border); border-radius: 10px;
+    color: var(--muted); cursor: pointer;
+  }
+  .mic .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); flex: none; }
+  .mic.recording { border-color: var(--rec); color: var(--rec); border-style: solid; }
+  .mic.recording .dot { background: var(--rec); animation: pulse 1s infinite; }
+  .mic.busy .dot { background: var(--warn); animation: pulse .6s infinite; }
+  .mic.error { color: var(--bad); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  kbd { font: 600 12px/1 inherit; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 2px 5px; background: var(--panel); }
+
+  .row { display: flex; gap: 8px; }
+  input[type=text] {
+    flex: 1; font: inherit; padding: 7px 10px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg); color: var(--text); outline: none; user-select: text;
+  }
+  input[type=text]:focus { border-color: var(--accent); }
+  .hint { color: var(--muted); font-size: 12.5px; }
+
+  .verdict { font-weight: 700; font-size: 15px; padding: 8px 12px; border-radius: 8px; }
+  .verdict.ok { background: var(--ok-bg); color: var(--ok); }
+  .verdict.partial { background: var(--warn-bg); color: var(--warn); }
+  .verdict.bad { background: var(--bad-bg); color: var(--bad); }
+  .card-text { user-select: text; display: flex; flex-direction: column; gap: 4px; }
+  .card-text .pt { font-size: 16px; font-weight: 600; }
+  .card-text .ru { font-size: 16px; }
+  .card-text .alt, .card-text .notes, .card-text .your, .card-text .feedback { font-size: 13px; color: var(--muted); }
+  .card-text .feedback { color: var(--text); }
+  .due { font-size: 12px; color: var(--muted); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .empty { text-align: center; color: var(--muted); padding: 20px 0; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="logo" viewBox="0 0 44 44">
+    <clipPath id="c"><circle cx="22" cy="22" r="20"/></clipPath>
+    <g clip-path="url(#c)">
+      <rect width="18" height="44" fill="#006600"/>
+      <rect x="18" width="26" height="44" fill="#d62028"/>
+    </g>
+    <circle cx="18" cy="22" r="7" fill="none" stroke="#ffcc00" stroke-width="3"/>
+  </symbol>
+</svg>
+
+<section id="toast">
+  <svg class="logo"><use href="#logo"/></svg>
+  <div>
+    <div class="title" id="t-title">Новая фраза</div>
+    <div class="sub" id="t-sub"></div>
+  </div>
+  <div class="actions">
+    <button class="primary" id="t-start">Начать</button>
+    <button id="t-later">Позже</button>
+    <button class="ghost" id="t-skip" title="Не сейчас (до следующего раза)">Закрыть</button>
+  </div>
+</section>
+
+<section id="quiz" hidden>
+  <header>
+    <span class="badge" id="badge">Новая</span>
+    <span class="attempt" id="attempt-label"></span>
+    <button class="ghost" id="q-close" title="Закрыть (Esc)">✕</button>
+  </header>
+  <main>
+    <div class="video-wrap" id="video-wrap" title="Нажмите, чтобы повторить">
+      <video id="video" preload="auto"></video>
+      <button class="replay slow" id="slow" title="Медленнее (0.7×)">🐢 Медленнее</button>
+      <button class="replay" id="replay">↻ Ещё раз</button>
+    </div>
+    <div class="source" id="source"></div>
+    <div class="subs" id="subs" hidden></div>
+
+    <div id="answer">
+      <div class="mic" id="mic"><span class="dot"></span><span id="mic-text"></span></div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="input" placeholder="…или введите перевод и нажмите Enter" autocomplete="off" spellcheck="false">
+        <button class="primary" id="check">Проверить</button>
+      </div>
+      <div class="row" style="margin-top:6px; justify-content: space-between; align-items: center">
+        <span class="hint" id="answer-hint">Скажите перевод на русский</span>
+        <button class="ghost" id="dunno">Не знаю</button>
+      </div>
+    </div>
+
+    <div id="checking" class="hint" hidden>Проверяю…</div>
+
+    <div id="result" hidden>
+      <div class="verdict" id="verdict"></div>
+      <div class="card-text" style="margin-top:10px">
+        <div class="feedback" id="feedback"></div>
+        <div class="pt" id="r-pt"></div>
+        <div class="ru" id="r-ru"></div>
+        <div class="alt" id="r-alt"></div>
+        <div class="notes" id="r-notes"></div>
+        <div class="your" id="r-your"></div>
+      </div>
+      <div class="actions" style="margin-top:12px">
+        <button class="primary" id="more">Ещё фраза</button>
+        <button id="done">Готово</button>
+        <button class="ghost" id="override" hidden>Засчитать как верно</button>
+      </div>
+      <div class="due" id="due" style="margin-top:8px"></div>
+    </div>
+
+    <div id="empty" class="empty" hidden>На сейчас всё: новых и просроченных фраз нет.</div>
+  </main>
+</section>
+
+<script>
+const { invoke, convertFileSrc } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+const $ = (id) => document.getElementById(id);
+
+let card = null;
+let attempt = 1;
+let pending = null;     // outcome not yet sent to the scheduler
+let answers = [];
+let videoEndedAt = 0;
+let busy = false;       // checking an answer
+let phase = 'toast';    // toast | answer | result | empty
+let toastTimer = null;
+
+function badge(c) {
+  const b = $('badge');
+  b.className = 'badge';
+  if (c.is_new) { b.textContent = 'Новая фраза'; b.classList.add('new'); }
+  else if (c.difficult) { b.textContent = 'Трудная'; b.classList.add('hard'); }
+  else { b.textContent = 'Повторение'; }
+}
+
+function micIdle() {
+  const m = $('mic');
+  m.className = 'mic';
+  $('mic-text').innerHTML = card && card.has_api
+    ? `Держите <kbd>${card.hotkey}</kbd> и говорите — или нажмите сюда`
+    : 'Нет ключа OpenAI в config.toml — голос недоступен, введите текстом';
+}
+
+function showToast(c) {
+  $('t-title').textContent = c.is_new ? 'Новая фраза' : (c.difficult ? 'Трудная фраза' : 'Повторим фразу');
+  $('t-sub').textContent = `Переведите на слух · ${c.source_title || ''}`;
+  toastTimer = setTimeout(() => invoke('snooze', { minutes: 10 }), 90_000);
+}
+
+function loadCard(c) {
+  card = c;
+  attempt = 1;
+  pending = null;
+  answers = [];
+  badge(c);
+  setSlow(false);
+  $('source').textContent = c.source_title || '';
+  $('subs').textContent = c.text_pt;
+  $('subs').hidden = true;
+  $('result').hidden = true;
+  $('empty').hidden = true;
+  $('checking').hidden = true;
+  $('answer').hidden = false;
+  $('input').value = '';
+  setAttemptLabel();
+  micIdle();
+  const v = $('video');
+  v.src = convertFileSrc(c.clip_path);
+  phase = 'answer';
+  play();
+}
+
+function setAttemptLabel() {
+  $('attempt-label').textContent = attempt === 1 ? 'Попытка 1 из 2 · без субтитров' : 'Попытка 2 из 2 · с субтитрами';
+  $('answer-hint').textContent = attempt === 1 ? 'Скажите перевод на русский' : 'Прочитайте субтитры и попробуйте ещё раз';
+}
+
+let slow = false;
+
+function setSlow(on) {
+  slow = on;
+  $('video').playbackRate = on ? 0.7 : 1;
+  $('slow').classList.toggle('on', on);
+}
+
+function play() {
+  const v = $('video');
+  v.playbackRate = slow ? 0.7 : 1;
+  v.currentTime = 0;
+  v.play().catch(() => {});
+}
+
+async function start() {
+  if (phase !== 'toast' || !card) return;
+  clearTimeout(toastTimer);
+  await invoke('begin');
+  $('toast').hidden = true;
+  $('quiz').hidden = false;
+  loadCard(card);
+  $('input').focus();
+  invoke('ui_log', { msg: `started phrase ${card.phrase_id}` });
+}
+
+async function submit(text) {
+  if (busy || phase !== 'answer') return;
+  busy = true;
+  const answer = (text ?? $('input').value).trim();
+  answers.push(answer || '—');
+  $('answer').hidden = true;
+  $('checking').hidden = false;
+  let v;
+  try {
+    v = await invoke('check_answer', { answer, attempt, latencyMs: videoEndedAt ? Date.now() - videoEndedAt : 0 });
+  } catch (e) {
+    v = { verdict: 'wrong', feedback: String(e) };
+  }
+  $('checking').hidden = true;
+  busy = false;
+
+  if (v.verdict === 'correct') {
+    return showResult(v, attempt === 1 ? 'first' : 'second');
+  }
+  if (v.verdict === 'partial') {
+    return showResult(v, 'second');
+  }
+  if (attempt === 1) {
+    // Second chance with subtitles; the judge's feedback would give the answer away.
+    attempt = 2;
+    setAttemptLabel();
+    $('subs').hidden = false;
+    $('answer').hidden = false;
+    $('input').value = '';
+    micIdle();
+    $('mic-text').textContent = answer ? `«${answer}» — не совсем. Посмотрите с субтитрами.` : 'Посмотрите с субтитрами.';
+    play();
+    $('input').focus();
+    return;
+  }
+  showResult(v, 'failed');
+}
+
+function showResult(v, outcome) {
+  phase = 'result';
+  pending = outcome;
+  $('subs').hidden = false;
+  $('answer').hidden = true;
+  const el = $('verdict');
+  if (outcome === 'failed') { el.className = 'verdict bad'; el.textContent = 'Не получилось — запомним эту фразу'; }
+  else if (v.verdict === 'partial') { el.className = 'verdict partial'; el.textContent = 'Почти верно'; }
+  else { el.className = 'verdict ok'; el.textContent = attempt === 1 ? 'Верно!' : 'Верно, со второй попытки'; }
+  $('feedback').textContent = v.feedback || '';
+  $('r-pt').textContent = card.text_pt;
+  $('r-ru').textContent = card.text_ru;
+  $('r-alt').textContent = card.alt_ru && card.alt_ru.length ? 'Также: ' + card.alt_ru.join(' · ') : '';
+  $('r-notes').textContent = card.notes || '';
+  $('r-your').textContent = 'Ваш ответ: ' + answers.join(' → ');
+  $('override').hidden = outcome !== 'failed' && v.verdict !== 'partial';
+  $('due').textContent = '';
+  $('result').hidden = false;
+  $('attempt-label').textContent = '';
+}
+
+async function commit() {
+  if (!pending) return;
+  const outcome = pending;
+  pending = null;
+  try {
+    const due = await invoke('finish', { outcome });
+    $('due').textContent = 'Следующий повтор ' + due;
+  } catch (e) { console.error(e); }
+}
+
+async function more() {
+  await commit();
+  const next = await invoke('next_card');
+  if (!next) {
+    phase = 'empty';
+    $('result').hidden = true;
+    $('subs').hidden = true;
+    $('empty').hidden = false;
+    return;
+  }
+  loadCard(next);
+}
+
+async function close() {
+  await commit();
+  invoke('close_quiz');
+}
+
+// ---------- wiring ----------
+
+$('t-start').onclick = start;
+$('t-later').onclick = () => invoke('snooze', { minutes: 10 });
+$('t-skip').onclick = () => invoke('close_quiz');
+$('q-close').onclick = close;
+$('done').onclick = close;
+$('more').onclick = more;
+$('override').onclick = () => {
+  pending = attempt === 1 ? 'first' : 'second';
+  $('verdict').className = 'verdict ok';
+  $('verdict').textContent = 'Засчитано';
+  $('override').hidden = true;
+};
+$('check').onclick = () => submit();
+$('dunno').onclick = () => submit('');
+$('input').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+$('video-wrap').onclick = play;
+$('slow').onclick = (e) => { e.stopPropagation(); setSlow(!slow); play(); };
+$('video').addEventListener('ended', () => { videoEndedAt = Date.now(); });
+$('video').addEventListener('error', () => {
+  const e = $('video').error;
+  invoke('ui_log', { msg: `video error ${e && e.code}: ${e && e.message} (${$('video').src})` });
+  $('mic-text').textContent = 'Не удалось загрузить клип';
+});
+$('video').addEventListener('loadeddata', () => invoke('ui_log', { msg: `video loaded ${$('video').duration.toFixed(2)}s` }));
+window.addEventListener('error', (e) => invoke('ui_log', { msg: `js error: ${e.message}` }));
+$('mic').onclick = () => { if (phase === 'answer' && card && card.has_api) invoke('toggle_record'); };
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { phase === 'toast' ? invoke('close_quiz') : close(); }
+  if (e.key === 'Enter' && phase === 'toast') start();
+  if (e.key === 'Enter' && phase === 'result' && document.activeElement.tagName !== 'BUTTON') more();
+});
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+listen('ui-start', start);
+listen('rec', ({ payload }) => {
+  if (phase !== 'answer') return;
+  const m = $('mic');
+  const t = $('mic-text');
+  switch (payload.state) {
+    case 'recording':
+      m.className = 'mic recording';
+      t.textContent = 'Запись… отпустите клавишу, чтобы отправить';
+      $('video').pause();
+      break;
+    case 'transcribing':
+      m.className = 'mic busy';
+      t.textContent = 'Распознаю…';
+      break;
+    case 'done':
+      micIdle();
+      $('input').value = payload.text;
+      if (payload.text) submit(payload.text);
+      break;
+    case 'error':
+      m.className = 'mic error';
+      t.textContent = payload.text;
+      break;
+    default:
+      micIdle();
+  }
+});
+
+(async () => {
+  card = await invoke('get_card');
+  if (!card) { invoke('close_quiz'); return; }
+  if (card.started || card.autostart) { phase = 'toast'; return start(); }
+  showToast(card);
+})();
+</script>
+</body>
+</html>

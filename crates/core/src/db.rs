@@ -1,10 +1,10 @@
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use crate::srs::{self, Direction};
+use crate::srs::{self, Direction, Outcome};
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS phrases (
@@ -58,6 +58,22 @@ CREATE TABLE IF NOT EXISTS attempts (
     feedback    TEXT NOT NULL DEFAULT '',
     latency_ms  INTEGER NOT NULL DEFAULT 0
 );
+-- How each card ended, on any device. The source of truth for progress:
+-- `reviews` is a cache recomputed from these events (see Db::recompute).
+CREATE TABLE IF NOT EXISTS events (
+    id          TEXT PRIMARY KEY,
+    device      TEXT NOT NULL,
+    phrase_uid  TEXT NOT NULL,
+    direction   INTEGER NOT NULL,
+    ts          TEXT NOT NULL,
+    outcome     TEXT NOT NULL,
+    answer      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS events_phrase ON events(phrase_uid, direction);
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sources (
     video_id     TEXT PRIMARY KEY,
     url          TEXT NOT NULL,
@@ -73,6 +89,22 @@ CREATE TABLE IF NOT EXISTS sources (
 
 pub struct Db {
     pub conn: Connection,
+    /// This installation, e.g. "desktop-3f9a…"; written into every event.
+    pub device_id: String,
+}
+
+/// One finished card. Synced between devices as a line of JSON.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Event {
+    pub id: String,
+    pub device: String,
+    /// `phrase_uid` of the phrase: the same on every device.
+    pub phrase: String,
+    pub dir: Direction,
+    pub ts: DateTime<Utc>,
+    pub outcome: Outcome,
+    #[serde(default)]
+    pub answer: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -145,6 +177,32 @@ pub fn normalize(text: &str) -> String {
     lowered.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Stable phrase id shared by all devices: FNV-1a 64 of the normalized text.
+pub fn phrase_uid(text_pt: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in normalize(text_pt).bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
+}
+
+/// Unique across devices: device, time and phrase.
+fn event_id(device: &str, ts: DateTime<Utc>, uid: &str) -> String {
+    format!("{device}-{}-{uid}", ts.timestamp_nanos_opt().unwrap_or_default())
+}
+
+fn new_device_id() -> String {
+    let prefix = if cfg!(target_os = "android") { "phone" } else { "desktop" };
+    let seed = format!(
+        "{:?}{}{}",
+        std::time::SystemTime::now(),
+        std::process::id(),
+        std::env::var("COMPUTERNAME").unwrap_or_default()
+    );
+    format!("{prefix}-{}", &phrase_uid(&seed)[..10])
+}
+
 fn start_of_local_day() -> DateTime<Utc> {
     let now = Local::now();
     now.date_naive()
@@ -169,7 +227,84 @@ impl Db {
             // pt-PT | pt-BR | mixed | not-pt; NULL = not checked yet.
             conn.execute_batch("ALTER TABLE sources ADD COLUMN variant TEXT")?;
         }
-        Ok(Self { conn })
+        let has_uid: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('phrases') WHERE name = 'uid'")?
+            .exists([])?;
+        if !has_uid {
+            conn.execute_batch("ALTER TABLE phrases ADD COLUMN uid TEXT")?;
+            let rows: Vec<(i64, String)> = conn
+                .prepare("SELECT id, text_pt FROM phrases")?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?;
+            for (id, text) in rows {
+                conn.execute("UPDATE phrases SET uid = ?2 WHERE id = ?1", params![id, phrase_uid(&text)])?;
+            }
+        }
+        conn.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS phrases_uid ON phrases(uid)")?;
+        let device_id = match conn
+            .query_row("SELECT value FROM meta WHERE key = 'device_id'", [], |r| r.get::<_, String>(0))
+            .optional()?
+        {
+            Some(id) => id,
+            None => {
+                let id = new_device_id();
+                conn.execute("INSERT INTO meta (key, value) VALUES ('device_id', ?1)", [&id])?;
+                id
+            }
+        };
+        let db = Self { conn, device_id };
+        db.migrate_reviews_to_events()?;
+        Ok(db)
+    }
+
+    /// Progress recorded before the event log existed lives only in `reviews`
+    /// and `attempts`. Rebuild one event per finished card from the attempts.
+    fn migrate_reviews_to_events(&self) -> Result<()> {
+        let events: i64 = self.conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))?;
+        let reviews: i64 = self.conn.query_row("SELECT COUNT(*) FROM reviews", [], |r| r.get(0))?;
+        if events > 0 || reviews == 0 {
+            return Ok(());
+        }
+        let rows: Vec<(i64, i64, DateTime<Utc>, i64, String, String)> = self
+            .conn
+            .prepare(
+                "SELECT a.phrase_id, a.direction, a.ts, a.attempt_no, a.verdict, a.answer
+                 FROM attempts a JOIN reviews r ON r.phrase_id = a.phrase_id AND r.direction = a.direction
+                 ORDER BY a.phrase_id, a.direction, a.ts",
+            )?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
+            .collect::<Result<_, _>>()?;
+        // A card = attempt 1, optionally followed by attempt 2 within half an hour.
+        let mut i = 0;
+        while i < rows.len() {
+            let (pid, dir, ts1, _, v1, a1) = rows[i].clone();
+            let first_ok = matches!(v1.as_str(), "correct" | "partial");
+            let second = rows
+                .get(i + 1)
+                .filter(|n| !first_ok && n.0 == pid && n.1 == dir && n.3 == 2 && (n.2 - ts1).num_minutes() < 30);
+            let (outcome, ts, answer) = match (v1.as_str(), second) {
+                ("correct", _) => (Outcome::First, ts1, a1),
+                ("partial", _) => (Outcome::Second, ts1, a1),
+                (_, Some(n)) => {
+                    let o = if n.4 == "wrong" { Outcome::Failed } else { Outcome::Second };
+                    (o, n.2, format!("{a1} → {}", n.5))
+                }
+                _ => (Outcome::Failed, ts1, a1),
+            };
+            i += if second.is_some() { 2 } else { 1 };
+            let uid: String = self.conn.query_row("SELECT uid FROM phrases WHERE id = ?1", [pid], |r| r.get(0))?;
+            self.insert_event(&Event {
+                id: event_id(&self.device_id, ts, &uid),
+                device: self.device_id.clone(),
+                phrase: uid,
+                dir: Direction::from_i64(dir),
+                ts,
+                outcome,
+                answer,
+            })?;
+        }
+        self.recompute_all()?;
+        Ok(())
     }
 
     // ---------- harvesting ----------
@@ -183,8 +318,8 @@ impl Db {
 
     pub fn insert_phrase(&self, p: &NewPhrase) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO phrases (text_pt, norm_pt, text_ru, alt_ru, notes, cefr, usefulness, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO phrases (text_pt, norm_pt, text_ru, alt_ru, notes, cefr, usefulness, created_at, uid)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 p.text_pt,
                 normalize(p.text_pt),
@@ -193,7 +328,8 @@ impl Db {
                 p.notes,
                 p.cefr,
                 p.usefulness,
-                Utc::now()
+                Utc::now(),
+                phrase_uid(p.text_pt)
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -400,41 +536,86 @@ impl Db {
         Ok(())
     }
 
-    /// Apply a rating to the phrase's FSRS state and the "difficult" flag.
-    pub fn review(&self, phrase_id: i64, dir: Direction, rating: rs_fsrs::Rating, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
-        let row = self
+    /// Records how a card ended and recomputes the phrase's schedule.
+    /// Returns when the phrase is due next.
+    pub fn record_outcome(
+        &self,
+        phrase_id: i64,
+        dir: Direction,
+        outcome: Outcome,
+        answer: &str,
+        now: DateTime<Utc>,
+    ) -> Result<DateTime<Utc>> {
+        let uid: String = self.conn.query_row("SELECT uid FROM phrases WHERE id = ?1", [phrase_id], |r| r.get(0))?;
+        self.insert_event(&Event {
+            id: event_id(&self.device_id, now, &uid),
+            device: self.device_id.clone(),
+            phrase: uid.clone(),
+            dir,
+            ts: now,
+            outcome,
+            answer: answer.to_string(),
+        })?;
+        Ok(self.recompute(&uid, dir)?.unwrap_or(now))
+    }
+
+    /// Adds an event (own or from another device). False if it was already known.
+    pub fn insert_event(&self, e: &Event) -> Result<bool> {
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO events (id, device, phrase_uid, direction, ts, outcome, answer)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![e.id, e.device, e.phrase, e.dir as i64, e.ts, e.outcome.as_str(), e.answer],
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn events_of_device(&self, device: &str) -> Result<Vec<Event>> {
+        let mut st = self.conn.prepare(
+            "SELECT id, device, phrase_uid, direction, ts, outcome, answer FROM events
+             WHERE device = ?1 ORDER BY ts, id",
+        )?;
+        let rows = st.query_map([device], |r| {
+            Ok(Event {
+                id: r.get(0)?,
+                device: r.get(1)?,
+                phrase: r.get(2)?,
+                dir: Direction::from_i64(r.get(3)?),
+                ts: r.get(4)?,
+                outcome: Outcome::parse(&r.get::<_, String>(5)?).unwrap_or(Outcome::Failed),
+                answer: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Replays all events of a phrase in time order (all devices) into the
+    /// `reviews` cache. Deterministic: every device computes the same schedule.
+    pub fn recompute(&self, uid: &str, dir: Direction) -> Result<Option<DateTime<Utc>>> {
+        let Some(phrase_id) = self
             .conn
-            .query_row(
-                "SELECT due, stability, difficulty, elapsed_days, scheduled_days, reps, lapses, state,
-                        last_review, first_review, difficult, streak
-                 FROM reviews WHERE phrase_id = ?1 AND direction = ?2",
-                params![phrase_id, dir as i64],
-                |r| {
-                    Ok((
-                        rs_fsrs::Card {
-                            due: r.get(0)?,
-                            stability: r.get(1)?,
-                            difficulty: r.get(2)?,
-                            elapsed_days: r.get(3)?,
-                            scheduled_days: r.get(4)?,
-                            reps: r.get(5)?,
-                            lapses: r.get(6)?,
-                            state: srs::state_from_i64(r.get(7)?),
-                            last_review: r.get(8)?,
-                        },
-                        r.get::<_, DateTime<Utc>>(9)?,
-                        r.get::<_, i64>(10)? != 0,
-                        r.get::<_, i64>(11)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let (card, first_review, difficult, streak) = match row {
-            Some(r) => r,
-            None => (rs_fsrs::Card::new(), now, false, 0),
+            .query_row("SELECT id FROM phrases WHERE uid = ?1", [uid], |r| r.get::<_, i64>(0))
+            .optional()?
+        else {
+            // Content not here yet (synced later): the events wait.
+            return Ok(None);
         };
-        let next = srs::schedule(card, now, rating);
-        let (difficult, streak) = srs::difficult_flag(difficult, streak, next.lapses, rating);
+        let events: Vec<(DateTime<Utc>, String)> = self
+            .conn
+            .prepare("SELECT ts, outcome FROM events WHERE phrase_uid = ?1 AND direction = ?2 ORDER BY ts, id")?
+            .query_map(params![uid, dir as i64], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        if events.is_empty() {
+            self.conn
+                .execute("DELETE FROM reviews WHERE phrase_id = ?1 AND direction = ?2", params![phrase_id, dir as i64])?;
+            return Ok(None);
+        }
+        let mut card = rs_fsrs::Card::new();
+        let (mut difficult, mut streak) = (false, 0);
+        for (ts, outcome) in &events {
+            let rating = Outcome::parse(outcome).unwrap_or(Outcome::Failed).rating();
+            card = srs::schedule(card, *ts, rating);
+            (difficult, streak) = srs::difficult_flag(difficult, streak, card.lapses, rating);
+        }
         self.conn.execute(
             "INSERT OR REPLACE INTO reviews (phrase_id, direction, due, stability, difficulty, elapsed_days,
                  scheduled_days, reps, lapses, state, last_review, first_review, difficult, streak)
@@ -442,21 +623,33 @@ impl Db {
             params![
                 phrase_id,
                 dir as i64,
-                next.due,
-                next.stability,
-                next.difficulty,
-                next.elapsed_days,
-                next.scheduled_days,
-                next.reps,
-                next.lapses,
-                next.state as i64,
-                next.last_review,
-                first_review,
+                card.due,
+                card.stability,
+                card.difficulty,
+                card.elapsed_days,
+                card.scheduled_days,
+                card.reps,
+                card.lapses,
+                card.state as i64,
+                card.last_review,
+                events[0].0,
                 difficult as i64,
                 streak
             ],
         )?;
-        Ok(next.due)
+        Ok(Some(card.due))
+    }
+
+    pub fn recompute_all(&self) -> Result<()> {
+        let keys: Vec<(String, i64)> = self
+            .conn
+            .prepare("SELECT DISTINCT phrase_uid, direction FROM events")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        for (uid, dir) in keys {
+            self.recompute(&uid, Direction::from_i64(dir))?;
+        }
+        Ok(())
     }
 
     pub fn stats(&self, dir: Direction) -> Result<Stats> {
@@ -519,8 +712,8 @@ mod tests {
         assert_eq!(first.phrase_id, b);
         assert!(first.is_new);
 
-        db.review(b, Direction::PtToRu, Outcome::Failed.rating(), now).unwrap();
-        db.review(a, Direction::PtToRu, Outcome::First.rating(), now).unwrap();
+        db.record_outcome(b, Direction::PtToRu, Outcome::Failed, "", now).unwrap();
+        db.record_outcome(a, Direction::PtToRu, Outcome::First, "", now).unwrap();
         // Later: the failed phrase is due before anything else and is marked difficult.
         let later = now + chrono::Duration::minutes(20);
         let next = db.next_card(Direction::PtToRu, later, 10).unwrap().unwrap();
@@ -529,12 +722,64 @@ mod tests {
         assert_eq!(db.new_today(Direction::PtToRu).unwrap(), 2);
     }
 
+    /// Two devices that exchange their events end up with the same schedule,
+    /// whatever order the events arrive in.
+    #[test]
+    fn devices_converge_after_exchanging_events() {
+        let pc = temp_db();
+        let phone = temp_db();
+        assert_ne!(pc.device_id, phone.device_id);
+        for db in [&pc, &phone] {
+            add(db, "Está bem.", 3);
+            add(db, "Não faz mal.", 5);
+        }
+        let t0 = Utc::now() - chrono::Duration::days(3);
+        let pid = |db: &Db, pt: &str| db.phrase_exists(pt).unwrap().unwrap();
+        pc.record_outcome(pid(&pc, "Está bem."), Direction::PtToRu, Outcome::Failed, "", t0).unwrap();
+        phone
+            .record_outcome(pid(&phone, "Está bem."), Direction::PtToRu, Outcome::Second, "", t0 + chrono::Duration::hours(1))
+            .unwrap();
+        pc.record_outcome(pid(&pc, "Está bem."), Direction::PtToRu, Outcome::First, "", t0 + chrono::Duration::days(1))
+            .unwrap();
+        phone
+            .record_outcome(pid(&phone, "Não faz mal."), Direction::PtToRu, Outcome::First, "", t0 + chrono::Duration::days(2))
+            .unwrap();
+
+        // Exchange (as sync would do through the shared folder).
+        for e in pc.events_of_device(&pc.device_id.clone()).unwrap() {
+            phone.insert_event(&e).unwrap();
+        }
+        for e in phone.events_of_device(&phone.device_id.clone()).unwrap() {
+            assert!(pc.insert_event(&e).unwrap());
+            assert!(!pc.insert_event(&e).unwrap(), "duplicates are ignored");
+        }
+        pc.recompute_all().unwrap();
+        phone.recompute_all().unwrap();
+
+        let schedule = |db: &Db| -> Vec<(String, String, i64, i64)> {
+            db.conn
+                .prepare(
+                    "SELECT p.uid, r.due, r.reps, r.difficult FROM reviews r JOIN phrases p ON p.id = r.phrase_id ORDER BY p.uid",
+                )
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        let a = schedule(&pc);
+        assert_eq!(a.len(), 2);
+        assert_eq!(a, schedule(&phone));
+        // Three answers on "Está bem.", from both devices.
+        assert!(a.iter().any(|r| r.2 == 3));
+    }
+
     #[test]
     fn daily_new_limit() {
         let db = temp_db();
         let a = add(&db, "Bom dia.", 3);
         add(&db, "Boa noite.", 3);
-        db.review(a, Direction::PtToRu, Outcome::First.rating(), Utc::now()).unwrap();
+        db.record_outcome(a, Direction::PtToRu, Outcome::First, "", Utc::now()).unwrap();
         assert!(db.next_card(Direction::PtToRu, Utc::now(), 1).unwrap().is_none());
     }
 

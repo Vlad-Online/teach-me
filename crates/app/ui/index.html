@@ -371,7 +371,7 @@ async function commit() {
   const outcome = pending;
   pending = null;
   try {
-    const due = await invoke('finish', { outcome });
+    const due = await invoke('finish', { outcome, answer: answers.join(' → ') });
     $('due').textContent = 'Следующий повтор ' + due;
   } catch (e) { console.error(e); }
 }

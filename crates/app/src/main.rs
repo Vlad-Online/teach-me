@@ -288,9 +288,9 @@ async fn check_answer(app: AppHandle, answer: String, attempt: i64, latency_ms: 
 }
 
 #[tauri::command]
-fn finish(st: State<AppState>, outcome: Outcome) -> CmdResult<String> {
+fn finish(st: State<AppState>, outcome: Outcome, answer: String) -> CmdResult<String> {
     let phrase_id = st.session.lock().unwrap().as_ref().map(|s| s.card.phrase_id).ok_or("нет карточки")?;
-    let due = st.db.lock().unwrap().review(phrase_id, DIR, outcome.rating(), Utc::now()).map_err(err)?;
+    let due = st.db.lock().unwrap().record_outcome(phrase_id, DIR, outcome, &answer, Utc::now()).map_err(err)?;
     st.plan_next_popup();
     Ok(human_due(due))
 }

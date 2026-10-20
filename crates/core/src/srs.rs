@@ -26,12 +26,41 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Outcome::FirstFast => "first_fast",
+            Outcome::First => "first",
+            Outcome::Second => "second",
+            Outcome::Failed => "failed",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "first_fast" => Outcome::FirstFast,
+            "first" => Outcome::First,
+            "second" => Outcome::Second,
+            "failed" => Outcome::Failed,
+            _ => return None,
+        })
+    }
+
     pub fn rating(self) -> Rating {
         match self {
             Outcome::FirstFast => Rating::Easy,
             Outcome::First => Rating::Good,
             Outcome::Second => Rating::Hard,
             Outcome::Failed => Rating::Again,
+        }
+    }
+}
+
+impl Direction {
+    pub fn from_i64(v: i64) -> Self {
+        if v == 1 {
+            Direction::RuToPt
+        } else {
+            Direction::PtToRu
         }
     }
 }

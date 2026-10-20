@@ -35,7 +35,7 @@
     ? `Адрес ПК: <code>${p.host}:${p.port}</code>`
     : 'Синхронизация выключена в config.toml ([sync] enabled = false)';
 })();
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.close(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.__TAURI__.core.invoke('close_window'); });
 </script>
 </body>
 </html>

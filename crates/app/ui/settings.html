@@ -370,7 +370,7 @@ document.querySelectorAll('input.hotkey').forEach((input) => {
 
 // ---------- save ----------
 
-$('cancel').onclick = () => window.close();
+$('cancel').onclick = () => invoke('close_window');
 $('save').onclick = async () => {
   $('msg').textContent = '';
   $('save').disabled = true;
@@ -385,7 +385,7 @@ $('save').onclick = async () => {
   }
 };
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !document.activeElement.classList.contains('hotkey')) window.close();
+  if (e.key === 'Escape' && !document.activeElement.classList.contains('hotkey')) invoke('close_window');
 });
 
 invoke('get_settings').then(fill).catch((e) => { $('msg').textContent = String(e); });

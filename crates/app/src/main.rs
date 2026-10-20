@@ -490,6 +490,13 @@ fn open_external(st: State<AppState>, target: String) -> CmdResult<()> {
     Ok(())
 }
 
+/// Closes the calling window. JS `window.close()` only unloads the page in a
+/// Tauri webview and leaves an empty frame.
+#[tauri::command]
+fn close_window(window: tauri::WebviewWindow) {
+    let _ = window.close();
+}
+
 #[tauri::command]
 fn show_pairing(app: AppHandle) {
     std::thread::spawn(move || open_pairing(&app));
@@ -650,6 +657,7 @@ fn main() {
             save_settings,
             list_models,
             open_external,
+            close_window,
             show_pairing,
             harvest::harvest_overview,
             harvest::harvest_start,

@@ -148,6 +148,9 @@ impl Default for OpenAiConfig {
     }
 }
 
+/// Ctrl+Space switches the input source on macOS.
+pub const DEFAULT_HOTKEY: &str = if cfg!(target_os = "macos") { "Alt+Space" } else { "Ctrl+Space" };
+
 impl Default for TrainerConfig {
     fn default() -> Self {
         Self {
@@ -157,7 +160,7 @@ impl Default for TrainerConfig {
             active_to_hour: 23,
             new_per_day: 10,
             idle_minutes: 3,
-            hotkey: "Ctrl+Space".into(),
+            hotkey: DEFAULT_HOTKEY.into(),
             card_now_hotkey: "Ctrl+Alt+P".into(),
         }
     }
@@ -208,7 +211,33 @@ impl Home {
                 }
             }
         }
+        // Started from the Applications folder / Start menu: ~/teach-me,
+        // created with default settings on first run.
+        let user_home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from);
+        if let Some(user_home) = user_home {
+            let home = Self { root: user_home.join("teach-me") };
+            home.create_defaults()?;
+            return Ok(home);
+        }
         bail!("config.toml not found (set TEACH_ME_HOME or run from the project folder)")
+    }
+
+    /// Writes config.toml and sources.toml if they are missing.
+    pub fn create_defaults(&self) -> Result<()> {
+        std::fs::create_dir_all(&self.root)?;
+        let config = self.config_path();
+        if !config.exists() {
+            let text = include_str!("../../../config.example.toml")
+                .replace("hotkey = \"Ctrl+Space\"", &format!("hotkey = \"{DEFAULT_HOTKEY}\""));
+            std::fs::write(&config, text)?;
+        }
+        let sources = self.sources_path();
+        if !sources.exists() {
+            std::fs::write(&sources, include_str!("../../../sources.toml"))?;
+        }
+        Ok(())
     }
 
     pub fn config_path(&self) -> PathBuf {

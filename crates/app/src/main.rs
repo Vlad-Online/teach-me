@@ -533,6 +533,9 @@ fn main() {
             get_pairing
         ])
         .setup(|app| {
+            // Menu bar only, no Dock icon.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let handle = app.handle().clone();
             let st = app.state::<AppState>();
             if let Some(s) = st.card_now {
@@ -545,10 +548,11 @@ fn main() {
             let pause_i = MenuItem::with_id(app, "pause", "Пауза на час", true, None::<&str>)?;
             let resume_i = MenuItem::with_id(app, "resume", "Продолжить", true, None::<&str>)?;
             let pair_i = MenuItem::with_id(app, "pair", "Подключить телефон…", true, None::<&str>)?;
+            let folder_i = MenuItem::with_id(app, "folder", "Открыть папку с настройками", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&now_i, &pause_i, &resume_i, &sep, &pair_i, &sep2, &quit_i])?;
+            let menu = Menu::with_items(app, &[&now_i, &pause_i, &resume_i, &sep, &pair_i, &folder_i, &sep2, &quit_i])?;
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("teach-me")
@@ -567,6 +571,10 @@ fn main() {
                         "pair" => {
                             let app = app.clone();
                             std::thread::spawn(move || open_pairing(&app));
+                        }
+                        "folder" => {
+                            let opener = if cfg!(windows) { "explorer" } else { "open" };
+                            let _ = std::process::Command::new(opener).arg(&st.home.root).spawn();
                         }
                         "quit" => app.exit(0),
                         _ => {}

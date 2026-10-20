@@ -27,12 +27,33 @@ pub fn busy() -> bool {
     matches!(state, 2..=4)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn idle_secs() -> u64 {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
+    }
+    // kCGEventSourceStateCombinedSessionState = 0, kCGAnyInputEventType = ~0
+    let secs = unsafe { CGEventSourceSecondsSinceLastEventType(0, u32::MAX) };
+    if secs.is_finite() && secs > 0.0 {
+        secs as u64
+    } else {
+        0
+    }
+}
+
+/// Not detected on macOS yet: popups also appear over fullscreen apps.
+#[cfg(target_os = "macos")]
+pub fn busy() -> bool {
+    false
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn idle_secs() -> u64 {
     0
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn busy() -> bool {
     false
 }

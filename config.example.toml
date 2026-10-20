@@ -28,7 +28,7 @@ active_from_hour = 9       # всплывать только с 9:00...
 active_to_hour = 23        # ...до 23:00
 new_per_day = 10           # новых фраз в день
 idle_minutes = 3           # не всплывать, если вас нет за компьютером дольше
-hotkey = "Ctrl+Space"      # держать — идёт запись голоса
+hotkey = "Ctrl+Space"      # держать — идёт запись голоса (на Mac: "Alt+Space" = ⌥ Option + пробел)
 card_now_hotkey = "Ctrl+Alt+P"  # показать карточку прямо сейчас
 
 [harvest]

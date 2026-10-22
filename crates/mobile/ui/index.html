@@ -409,32 +409,47 @@ $('override').onclick = () => {
 
 // ---------------- voice: hold to talk ----------------
 
-let recorder = null, chunks = [], stream = null;
+// The microphone is opened only for the duration of one recording: a held
+// stream keeps Android's mic busy and other apps (calls) get silence.
+let recorder = null, chunks = [], stream = null, holding = false;
+
+function releaseMic() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+}
 
 async function recStart() {
-  if (phase !== 'answer' || recorder) return;
+  if (phase !== 'answer' || recorder || holding) return;
+  holding = true;
   try {
-    stream = stream || await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (e) {
+    holding = false;
     $('mic-text').textContent = 'Нет доступа к микрофону';
     return;
   }
+  if (!holding) { releaseMic(); return; } // released before the mic opened
   $('video').pause();
   chunks = [];
   recorder = new MediaRecorder(stream);
   recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-  recorder.onstop = onRecorded;
+  recorder.onstop = () => { releaseMic(); onRecorded(); };
   recorder.start();
   $('mic').className = 'mic recording';
   $('mic-text').textContent = 'Говорите… отпустите, чтобы отправить';
 }
 
 function recStop() {
+  holding = false;
   if (!recorder) return;
   const r = recorder;
   recorder = null;
   r.stop();
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { recStop(); releaseMic(); }
+});
 
 async function onRecorded() {
   const blob = new Blob(chunks, { type: chunks[0] ? chunks[0].type : 'audio/webm' });
